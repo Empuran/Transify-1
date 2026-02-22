@@ -11,6 +11,7 @@ import {
   ChevronDown,
   CheckCircle2,
   Circle,
+  Sparkles,
 } from "lucide-react"
 import { StatusBadge } from "./status-badge"
 import { useAuth } from "@/hooks/use-auth"
@@ -49,10 +50,11 @@ const timelineStops = [
 
 interface ParentHomeScreenProps {
   isPremium?: boolean
+  onUpgrade?: () => void
   onSOS?: () => void
 }
 
-export function ParentHomeScreen({ isPremium = false, onSOS }: ParentHomeScreenProps) {
+export function ParentHomeScreen({ isPremium = false, onUpgrade, onSOS }: ParentHomeScreenProps) {
   const { profile } = useAuth()
   const [selectedChild, setSelectedChild] = useState(children[0])
   const [showChildPicker, setShowChildPicker] = useState(false)
@@ -71,10 +73,18 @@ export function ParentHomeScreen({ isPremium = false, onSOS }: ParentHomeScreenP
             <h1 className="text-lg font-bold text-foreground">{userName}</h1>
           </div>
           <div className="flex items-center gap-2">
-            {isPremium && (
+            {isPremium ? (
               <span className="rounded-full bg-gold/15 px-2.5 py-0.5 text-[10px] font-bold text-gold">
                 PREMIUM
               </span>
+            ) : (
+              <button
+                onClick={onUpgrade}
+                className="flex items-center gap-1.5 rounded-full bg-gold/15 px-3 py-1.5 text-[11px] font-bold text-gold transition-colors active:bg-gold/25"
+              >
+                <Sparkles className="h-3 w-3" />
+                Go Premium
+              </button>
             )}
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary">
               <span className="text-sm font-bold text-primary-foreground">{initials}</span>

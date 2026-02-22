@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation"
 
 export default function ParentDashboardPage() {
     const [activeTab, setActiveTab] = useState<ParentTab>("home")
-    const [isPremium, setIsPremium] = useState(true)
+    const [isPremium, setIsPremium] = useState(false)
     const [showPremium, setShowPremium] = useState(false)
     const router = useRouter()
 
@@ -26,7 +26,10 @@ export default function ParentDashboardPage() {
     return (
         <>
             {activeTab === "home" && (
-                <ParentHomeScreen isPremium={isPremium} />
+                <ParentHomeScreen
+                    isPremium={isPremium}
+                    onUpgrade={() => setShowPremium(true)}
+                />
             )}
             {activeTab === "trips" && <ParentTripsScreen />}
             {activeTab === "alerts" && <ParentAlertsScreen />}
