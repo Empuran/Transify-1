@@ -4,103 +4,101 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #FFFBEB;
-  --foreground: #1F2937;
+  /* === TRANSIFY LIGHT THEME === */
+  --background: #F0F4FF;
+  --foreground: #0F172A;
   --card: #FFFFFF;
-  --card-foreground: #1F2937;
+  --card-foreground: #0F172A;
   --popover: #FFFFFF;
-  --popover-foreground: #1F2937;
-  --primary: #166534;
+  --popover-foreground: #0F172A;
+  --primary: #2563EB;
   --primary-foreground: #FFFFFF;
-  --secondary: #F0FDF4;
-  --secondary-foreground: #166534;
-  --muted: #FEF3C7;
-  --muted-foreground: #6B7280;
-  --accent: #DCFCE7;
-  --accent-foreground: #166534;
-  --destructive: #B91C1C;
+  --secondary: #EFF6FF;
+  --secondary-foreground: #1D4ED8;
+  --muted: #E2E8F0;
+  --muted-foreground: #64748B;
+  --accent: #DBEAFE;
+  --accent-foreground: #1D4ED8;
+  --destructive: #DC2626;
   --destructive-foreground: #FFFFFF;
-  --border: #E5E7EB;
-  --input: #E5E7EB;
-  --ring: #22C55E;
-  --chart-1: #166534;
-  --chart-2: #22C55E;
-  --chart-3: #B45309;
-  --chart-4: #B91C1C;
-  --chart-5: #D4AF37;
-  --radius: 0.75rem;
+  --border: #CBD5E1;
+  --input: #E2E8F0;
+  --ring: #3B82F6;
+  --chart-1: #2563EB;
+  --chart-2: #0EA5E9;
+  --chart-3: #0D9488;
+  --chart-4: #DC2626;
+  --chart-5: #F59E0B;
+  --radius: 0.875rem;
   --sidebar: #FFFFFF;
-  --sidebar-foreground: #1F2937;
-  --sidebar-primary: #166534;
+  --sidebar-foreground: #0F172A;
+  --sidebar-primary: #2563EB;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #F0FDF4;
-  --sidebar-accent-foreground: #166534;
-  --sidebar-border: #E5E7EB;
-  --sidebar-ring: #22C55E;
-  --success: #15803D;
+  --sidebar-accent: #EFF6FF;
+  --sidebar-accent-foreground: #1D4ED8;
+  --sidebar-border: #CBD5E1;
+  --sidebar-ring: #3B82F6;
+  --success: #0D9488;
   --success-foreground: #FFFFFF;
-  --warning: #B45309;
+  --warning: #D97706;
   --warning-foreground: #FFFFFF;
-  --gold: #D4AF37;
-  --gold-foreground: #422006;
-  --highlight: #FACC15;
-  --highlight-foreground: #422006;
+  --gold: #F59E0B;
+  --gold-foreground: #78350F;
+  --highlight: #F59E0B;
+  --highlight-foreground: #78350F;
+  --teal: #0D9488;
+  --teal-foreground: #FFFFFF;
 }
 
 .dark {
-  --background: #0C1A0F;
-  --foreground: #F1F5F0;
-  --card: #162419;
-  --card-foreground: #F1F5F0;
-  --popover: #162419;
-  --popover-foreground: #F1F5F0;
-  --primary: #22C55E;
-  --primary-foreground: #052E16;
-  --secondary: #1A2E1D;
-  --secondary-foreground: #BBF7D0;
-  --muted: #1C2A1F;
+  /* === TRANSIFY DARK THEME — Deep Navy === */
+  --background: #0B0F1A;
+  --foreground: #E2E8F0;
+  --card: #131929;
+  --card-foreground: #E2E8F0;
+  --popover: #131929;
+  --popover-foreground: #E2E8F0;
+  --primary: #3B82F6;
+  --primary-foreground: #FFFFFF;
+  --secondary: #1A2340;
+  --secondary-foreground: #93C5FD;
+  --muted: #1E2D40;
   --muted-foreground: #94A3B8;
-  --accent: #1A3A1F;
-  --accent-foreground: #86EFAC;
+  --accent: #1E3A5F;
+  --accent-foreground: #93C5FD;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
-  --border: #2A3D2D;
-  --input: #2A3D2D;
-  --ring: #22C55E;
-  --chart-1: #22C55E;
-  --chart-2: #4ADE80;
-  --chart-3: #F59E0B;
+  --border: #1E2D40;
+  --input: #1E2D40;
+  --ring: #3B82F6;
+  --chart-1: #3B82F6;
+  --chart-2: #38BDF8;
+  --chart-3: #14B8A6;
   --chart-4: #EF4444;
-  --chart-5: #D4AF37;
-  --sidebar: #162419;
-  --sidebar-foreground: #F1F5F0;
-  --sidebar-primary: #22C55E;
-  --sidebar-primary-foreground: #052E16;
-  --sidebar-accent: #1A3A1F;
-  --sidebar-accent-foreground: #86EFAC;
-  --sidebar-border: #2A3D2D;
-  --sidebar-ring: #22C55E;
-  --success: #22C55E;
+  --chart-5: #F59E0B;
+  --sidebar: #131929;
+  --sidebar-foreground: #E2E8F0;
+  --sidebar-primary: #3B82F6;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #1E3A5F;
+  --sidebar-accent-foreground: #93C5FD;
+  --sidebar-border: #1E2D40;
+  --sidebar-ring: #3B82F6;
+  --success: #14B8A6;
   --success-foreground: #FFFFFF;
   --warning: #F59E0B;
   --warning-foreground: #FFFFFF;
-  --gold: #D4AF37;
-  --gold-foreground: #422006;
-  --highlight: #FACC15;
-  --highlight-foreground: #422006;
+  --gold: #FBBF24;
+  --gold-foreground: #78350F;
+  --highlight: #FBBF24;
+  --highlight-foreground: #78350F;
+  --teal: #14B8A6;
+  --teal-foreground: #FFFFFF;
 }
 
 @theme inline {
-  --font-sans: 'Inter', 'Geist', 'Geist Fallback';
-  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-gold: var(--gold);
-  --color-gold-foreground: var(--gold-foreground);
-  --color-highlight: var(--highlight);
-  --color-highlight-foreground: var(--highlight-foreground);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -137,6 +135,16 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-gold: var(--gold);
+  --color-gold-foreground: var(--gold-foreground);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-teal: var(--teal);
+  --color-teal-foreground: var(--teal-foreground);
 }
 
 @layer base {
@@ -145,5 +153,44 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
   }
+}
+
+/* === TRANSIFY LOGO ANIMATION === */
+@keyframes routeDraw {
+  from { stroke-dashoffset: 200; }
+  to   { stroke-dashoffset: 0; }
+}
+@keyframes busSlide {
+  from { transform: translateX(-40px); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+@keyframes logoFadeUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes dotPulseTrail {
+  0%   { opacity: 0.3; transform: scale(0.8); }
+  50%  { opacity: 1;   transform: scale(1.2); }
+  100% { opacity: 0.3; transform: scale(0.8); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.route-path-animated {
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: routeDraw 1.2s ease-out 0.3s forwards;
+}
+.bus-icon-animated {
+  animation: busSlide 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+}
+.logo-text-animated {
+  animation: logoFadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) 1.1s both;
+}
+.dot-trail {
+  animation: dotPulseTrail 1.2s ease-in-out infinite;
 }

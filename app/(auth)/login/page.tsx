@@ -24,14 +24,14 @@ function LoginContent() {
 
     const handleLogin = (role: UserRole) => {
         // Update auth state so layout allows access
-        loginMock(role === "parent" ? "guardian" : (role as any))
+        loginMock(role === "parent" ? "guardian" : (role as any), category)
 
         // Redirect to dashboard
         const rolePath = role === "parent" ? "/parent" : `/${role}`
         router.push(rolePath)
     }
 
-    return <LoginScreen onLogin={handleLogin} assignedRole={assignedRole} />
+    return <LoginScreen onLogin={handleLogin} assignedRole={assignedRole} orgCategory={category} />
 }
 
 export default function LoginPage() {

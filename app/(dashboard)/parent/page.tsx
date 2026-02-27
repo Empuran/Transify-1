@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { useAuth } from "@/hooks/use-auth"
-import { auth } from "@/lib/firebase"
 import { ParentHomeScreen } from "@/components/transify/home-screen"
 import { ParentTripsScreen } from "@/components/transify/trips-screen"
 import { ParentAlertsScreen } from "@/components/transify/alerts-screen"
@@ -16,10 +15,11 @@ export default function ParentDashboardPage() {
     const [activeTab, setActiveTab] = useState<ParentTab>("home")
     const [isPremium, setIsPremium] = useState(false)
     const [showPremium, setShowPremium] = useState(false)
+    const { logoutMock } = useAuth()
     const router = useRouter()
 
-    const handleLogout = async () => {
-        await auth.signOut()
+    const handleLogout = () => {
+        logoutMock()
         router.push("/category")
     }
 

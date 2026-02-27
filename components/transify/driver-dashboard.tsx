@@ -13,11 +13,13 @@ import {
   Navigation,
   Users,
   Route,
+  LogOut,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/hooks/use-auth"
 import { StatusBadge } from "./status-badge"
 import { cn } from "@/lib/utils"
+import { useRouter } from "next/navigation"
 
 type TripState = "not-started" | "in-progress" | "completed"
 
@@ -31,7 +33,8 @@ const routeStops = [
 ]
 
 export function DriverDashboard() {
-  const { profile } = useAuth()
+  const { profile, logoutMock } = useAuth()
+  const router = useRouter()
   const [tripState, setTripState] = useState<TripState>("in-progress")
   const [showDelayReport, setShowDelayReport] = useState(false)
   const [showSosConfirm, setShowSosConfirm] = useState(false)
@@ -248,6 +251,17 @@ export function DriverDashboard() {
           <AlertTriangle className="mr-2 h-5 w-5" />
           Emergency SOS
         </Button>
+      </div>
+
+      {/* Sign Out */}
+      <div className="mx-4 mt-4">
+        <button
+          onClick={() => { logoutMock(); router.push("/category") }}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3.5 transition-colors active:bg-destructive/10"
+        >
+          <LogOut className="h-4 w-4 text-destructive" />
+          <span className="text-sm font-semibold text-destructive">Sign Out</span>
+        </button>
       </div>
 
       {/* Delay Report Bottom Sheet */}

@@ -30,31 +30,31 @@ const categories: {
   description: string
   icon: typeof Bus
 }[] = [
-  {
-    id: "school",
-    label: "School / College",
-    description: "Educational institution transport",
-    icon: GraduationCap,
-  },
-  {
-    id: "corporate",
-    label: "Corporate / Organization",
-    description: "Employee shuttle management",
-    icon: Building2,
-  },
-  {
-    id: "parent",
-    label: "Parent / Guardian",
-    description: "Track your child's transport",
-    icon: Users,
-  },
-  {
-    id: "driver",
-    label: "Driver",
-    description: "Manage trips and routes",
-    icon: Truck,
-  },
-]
+    {
+      id: "school",
+      label: "School / College",
+      description: "Educational institution transport",
+      icon: GraduationCap,
+    },
+    {
+      id: "corporate",
+      label: "Corporate / Organization",
+      description: "Employee shuttle management",
+      icon: Building2,
+    },
+    {
+      id: "parent",
+      label: "Parent / Guardian",
+      description: "Track your child's transport",
+      icon: Users,
+    },
+    {
+      id: "driver",
+      label: "Driver",
+      description: "Manage trips and routes",
+      icon: Truck,
+    },
+  ]
 
 const sampleOrgs = [
   { code: "DPS-BLR-001", name: "Delhi Public School, Bangalore" },
@@ -76,10 +76,10 @@ export function CategorySelectionScreen({ onContinue }: CategorySelectionScreenP
 
   const filteredOrgs = searchQuery.length > 1
     ? sampleOrgs.filter(
-        (o) =>
-          o.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          o.code.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+      (o) =>
+        o.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        o.code.toLowerCase().includes(searchQuery.toLowerCase())
+    )
     : []
 
   return (
@@ -167,7 +167,7 @@ export function CategorySelectionScreen({ onContinue }: CategorySelectionScreenP
             <Button
               onClick={() => selectedCategory && setStep("organization")}
               disabled={!selectedCategory}
-              className="h-12 rounded-xl bg-highlight text-highlight-foreground font-semibold hover:bg-highlight/90"
+              className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90"
             >
               Continue
               <ArrowRight className="ml-2 h-4 w-4" />

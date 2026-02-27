@@ -6,11 +6,13 @@ import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 
 export type UserRole = "admin" | "driver" | "guardian"
+export type OrgCategory = "school" | "corporate"
 
 export interface UserProfile {
     id: string
     phone: string
     globalName: string
+    orgCategory?: OrgCategory
     roles: {
         [orgId: string]: UserRole
     }
@@ -33,7 +35,8 @@ interface AuthContextType {
     currentRole: UserRole | null
     activeOrgId: string | null
     setActiveOrg: (orgId: string) => void
-    loginMock: (role: UserRole) => void
+    loginMock: (role: UserRole, orgCategory?: OrgCategory) => void
+    logoutMock: () => void
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -44,6 +47,7 @@ const AuthContext = createContext<AuthContextType>({
     activeOrgId: null,
     setActiveOrg: () => { },
     loginMock: () => { },
+    logoutMock: () => { },
 })
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -52,11 +56,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true)
     const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
 
-    const loginMock = (role: UserRole) => {
+    const loginMock = (role: UserRole, orgCategory?: OrgCategory) => {
         const mockProfile: UserProfile = {
             id: "test_user_id",
             phone: "+919999999999",
             globalName: "Test User",
+            orgCategory: orgCategory || "school",
             roles: { "org_123": role },
             activeOrgId: "org_123",
             children: [
@@ -74,6 +79,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser({ uid: "test_user_id", phoneNumber: "+919999999999" } as FirebaseUser)
         setProfile(mockProfile)
         setActiveOrgId("org_123")
+    }
+
+    const logoutMock = () => {
+        setUser(null)
+        setProfile(null)
+        setActiveOrgId(null)
+        // Also sign out from Firebase in case it's configured
+        auth.signOut().catch(() => { })
     }
 
     useEffect(() => {
@@ -128,6 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 activeOrgId,
                 setActiveOrg: setActiveOrgId,
                 loginMock,
+                logoutMock,
             }}
         >
             {children}
