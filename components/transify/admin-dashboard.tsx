@@ -6,7 +6,7 @@ import {
   Search, Download, Route, UserPlus, BarChart3, TrendingUp,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown,
+  Filter, X, ChevronDown, ShieldCheck,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,9 +16,10 @@ import { AddStudentForm } from "./admin-form-add-student"
 import { AddDriverForm } from "./admin-form-add-driver"
 import { AddVehicleForm } from "./admin-form-add-vehicle"
 import { AddRouteForm } from "./admin-form-add-route"
+import { AdminManagement } from "./admin-management"
 import { useRouter } from "next/navigation"
 
-type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings"
+type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
 type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -111,21 +112,23 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export function AdminDashboard() {
-  const { profile, logoutMock } = useAuth()
+  const { profile, logoutMock, adminSession } = useAuth()
   const router = useRouter()
   const [section, setSection] = useState<ActiveSection>("overview")
   const [activeForm, setActiveForm] = useState<ActiveForm>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  // ── Determine org type (school vs corporate) ──
-  // In real app this would come from profile.orgCategory
-  // Using a mock — in production wire from profile
-  const isCorporate = (profile as any)?.orgCategory === "corporate"
+  // ── Determine org type from admin session or profile ──
+  const isCorporate = adminSession?.organization_category === "corporate" || (profile as any)?.orgCategory === "corporate"
   const memberLabel = isCorporate ? "Employees" : "Students"
   const memberIcon = isCorporate ? Briefcase : GraduationCap
 
-  const userName = profile?.globalName || "Test User"
+  // Use admin session data if available, fallback to profile
+  const userName = adminSession?.name || profile?.globalName || "Test User"
+  const userEmail = adminSession?.email || profile?.email || ""
+  const adminRole = adminSession?.role || "ADMIN"
+  const isSuperAdmin = adminRole === "SUPER_ADMIN"
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 3000) }
@@ -198,7 +201,10 @@ export function AdminDashboard() {
     },
     {
       group: "System",
-      items: [{ id: "settings", label: "Settings", icon: Settings }],
+      items: [
+        ...(isSuperAdmin ? [{ id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck }] : []),
+        ...(isSuperAdmin ? [{ id: "settings" as ActiveSection, label: "Settings", icon: Settings }] : []),
+      ],
     },
   ]
 
@@ -248,7 +254,7 @@ export function AdminDashboard() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-foreground truncate">{userName}</p>
-              <p className="text-[10px] text-muted-foreground">Administrator</p>
+              <p className="text-[10px] text-muted-foreground">{isSuperAdmin ? "Super Admin" : "Admin"}</p>
             </div>
           </div>
           <button onClick={handleLogout}
@@ -816,6 +822,11 @@ export function AdminDashboard() {
                 </Button>
               </div>
             </div>
+          )}
+
+          {/* ADMIN MANAGEMENT (Super Admin only) */}
+          {section === "admins" && adminSession && (
+            <AdminManagement adminSession={adminSession} />
           )}
 
         </main>

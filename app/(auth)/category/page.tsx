@@ -7,9 +7,13 @@ export default function CategoryPage() {
     const router = useRouter()
 
     const handleContinue = (category: OrgCategory, orgCode: string) => {
-        // Store category in session/cookie or pass via query param
-        // For now, let's use query params for simplicity in this flow
-        router.push(`/login?category=${category}&orgCode=${orgCode}`)
+        // Admin categories (school/corporate) → new admin login flow
+        if (category === "school" || category === "corporate") {
+            router.push(`/admin-login?category=${category}`)
+        } else {
+            // Parent/Driver → existing phone-based login
+            router.push(`/login?category=${category}&orgCode=${orgCode}`)
+        }
     }
 
     return <CategorySelectionScreen onContinue={handleContinue} />

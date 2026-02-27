@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, signInWithCustomToken } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -19,4 +19,4 @@ const app = firebaseConfig.apiKey ? (getApps().length === 0 ? initializeApp(fire
 const auth = app ? getAuth(app) : ({} as any);
 const db = app ? getFirestore(app) : ({} as any);
 
-export { app, auth, db };
+export { app, auth, db, signInWithCustomToken };
