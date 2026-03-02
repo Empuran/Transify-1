@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, Suspense } from "react"
+import { useState, useEffect, Suspense, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { AdminLoginScreen } from "@/components/transify/admin-login-screen"
 import { useAuth, type AdminSession } from "@/hooks/use-auth"
@@ -27,24 +27,27 @@ function AdminLoginContent() {
     const { loginAdmin } = useAuth()
 
     const category = (searchParams.get("category") as "school" | "corporate") || "school"
+    const urlOrgCode = searchParams.get("orgCode")
 
     const [step, setStep] = useState<"org" | "auth">("org")
     const [verifiedOrg, setVerifiedOrg] = useState<Organization | null>(null)
 
     // Org verification state
-    const [orgCode, setOrgCode] = useState("")
+    const [orgCode, setOrgCode] = useState(urlOrgCode || "")
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [hasAutoVerified, setHasAutoVerified] = useState(false)
 
     const CategoryIcon = category === "school" ? GraduationCap : Building2
 
-    const handleVerifyOrg = async () => {
-        if (!orgCode.trim()) return
+    const handleVerifyOrg = useCallback(async (codeToVerify?: string) => {
+        const code = codeToVerify || orgCode;
+        if (!code.trim()) return
         setLoading(true)
         setError(null)
 
         try {
-            const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(orgCode.trim().toUpperCase())}`)
+            const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(code.trim().toUpperCase())}`)
             const data = await res.json()
 
             if (!res.ok) {
@@ -58,11 +61,33 @@ function AdminLoginContent() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [orgCode])
+
+    useEffect(() => {
+        if (urlOrgCode && !hasAutoVerified && !verifiedOrg) {
+            setHasAutoVerified(true)
+            handleVerifyOrg(urlOrgCode)
+        }
+    }, [urlOrgCode, hasAutoVerified, verifiedOrg, handleVerifyOrg])
 
     const handleLoginSuccess = async (customToken: string, adminData: AdminSession) => {
         try {
             await loginAdmin(customToken, adminData)
+            // Log admin login event for super admin audit trail
+            fetch("/api/logs/add", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "login",
+                    entity_type: "system",
+                    entity_id: adminData.user_id || adminData.email,
+                    admin_id: adminData.user_id || adminData.email,
+                    admin_name: adminData.name,
+                    admin_email: adminData.email,
+                    organization_id: adminData.organization_id,
+                    details: `${adminData.name} (${adminData.email}) logged in as ${adminData.role}.`,
+                }),
+            }).catch(() => { })
             router.push("/admin")
         } catch (error) {
             console.error("Login failed:", error)
@@ -154,7 +179,7 @@ function AdminLoginContent() {
                         </div>
 
                         <Button
-                            onClick={handleVerifyOrg}
+                            onClick={() => handleVerifyOrg()}
                             disabled={!orgCode.trim() || loading}
                             className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 disabled:opacity-50"
                         >

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,7 +23,6 @@ export interface StudentData {
 
 const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
 const deptOptions = ["Engineering", "Design", "Marketing", "HR", "Finance", "Operations", "Legal", "Sales"]
-const routeOptions = ["Route A12 – Koramangala", "Route B5 – Indiranagar", "Route C3 – HSR Layout", "Route D7 – Whitefield", "Route E1 – Jayanagar"]
 
 export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStudentFormProps) {
     const [data, setData] = useState<StudentData>({
@@ -32,16 +31,50 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStud
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [routeOptions, setRouteOptions] = useState<string[]>(["Unassigned"])
+
+    // Fetch real routes from Firestore
+    useEffect(() => {
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+        if (!orgId) return
+
+        fetch(`/api/routes/list?organization_id=${orgId}`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.routes) {
+                    const names = d.routes.map((ro: any) => ro.route_name)
+                    setRouteOptions([...names, "Unassigned"])
+                }
+            }).catch(() => { })
+    }, [])
 
     const isValid = data.name.trim() && data.grade && data.memberId.trim() && data.parentPhone.trim() && data.route
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!isValid) return
-        setSaved(true)
-        setTimeout(() => {
-            onSave(data)
-            onClose()
-        }, 800)
+
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+
+        if (!orgId) { alert("Organization not found. Please log in again."); return }
+
+        try {
+            const res = await fetch("/api/students/add", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }),
+            })
+            const result = await res.json()
+            if (!res.ok) throw new Error(result.error)
+
+            setSaved(true)
+            setTimeout(() => { onSave(data); onClose() }, 800)
+        } catch (err: any) {
+            alert(err.message || "Failed to add member")
+        }
     }
 
     return (

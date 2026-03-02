@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { X, User, Phone, CreditCard, Bus, Building2, Check, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 interface AddDriverFormProps {
+    initialData?: any
     onClose: () => void
     onSave: (data: DriverData) => void
 }
@@ -20,23 +21,73 @@ export interface DriverData {
     licenseType: string
 }
 
-const vehicleOptions = ["KA-01-AB-1234 (Route A12)", "KA-05-CD-5678 (Route B5)", "KA-09-EF-9012 (Route C3)", "KA-12-GH-3456 (Route D7)", "Unassigned"]
 const licenseTypes = ["LMV", "HMV", "HTV", "PSV", "HPMV"]
 
-export function AddDriverForm({ onClose, onSave }: AddDriverFormProps) {
+export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormProps) {
     const [data, setData] = useState<DriverData>({
-        name: "", phone: "", licenseNumber: "", vehicleId: "", organization: "", licenseType: "",
+        name: initialData?.name || "",
+        phone: initialData?.phone || "",
+        licenseNumber: initialData?.license_number || initialData?.licenseNumber || "",
+        vehicleId: initialData?.vehicle_id || initialData?.vehicleId || "",
+        organization: initialData?.organization || "",
+        licenseType: initialData?.license_type || initialData?.licenseType || "",
     })
     const [showVehicle, setShowVehicle] = useState(false)
     const [showLicense, setShowLicense] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [vehicleOptions, setVehicleOptions] = useState<string[]>(["Unassigned"])
+
+    // Fetch real vehicles from Firestore
+    useEffect(() => {
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+        if (!orgId) return
+        fetch(`/api/vehicles/list?organization_id=${orgId}`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.vehicles) {
+                    const plates = d.vehicles.map((v: any) => v.plate_number || v.id)
+                    setVehicleOptions([...plates, "Unassigned"])
+                }
+            }).catch(() => { })
+    }, [])
 
     const isValid = data.name.trim() && data.phone.trim() && data.licenseNumber.trim() && data.licenseType
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!isValid) return
-        setSaved(true)
-        setTimeout(() => { onSave(data); onClose() }, 800)
+
+        // Get admin session for organization_id
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+
+        if (!orgId) {
+            alert("Organization not found. Please log in again.")
+            return
+        }
+
+        try {
+            const endpoint = initialData ? "/api/drivers/update" : "/api/drivers/add"
+            const payload = initialData
+                ? { ...data, driver_id: initialData.id, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+                : { ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            })
+
+            const result = await res.json()
+            if (!res.ok) throw new Error(result.error)
+
+            setSaved(true)
+            setTimeout(() => { onSave(data); onClose() }, 800)
+        } catch (err: any) {
+            alert(err.message || `Failed to ${initialData ? "update" : "add"} driver`)
+        }
     }
 
     return (
@@ -51,8 +102,8 @@ export function AddDriverForm({ onClose, onSave }: AddDriverFormProps) {
                             <User className="h-5 w-5 text-teal" />
                         </div>
                         <div>
-                            <h2 className="text-base font-bold text-foreground">Add Driver</h2>
-                            <p className="text-xs text-muted-foreground">Onboard a new driver</p>
+                            <h2 className="text-base font-bold text-foreground">{initialData ? "Edit Driver" : "Add Driver"}</h2>
+                            <p className="text-xs text-muted-foreground">{initialData ? "Update driver details" : "Onboard a new driver"}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
@@ -144,7 +195,11 @@ export function AddDriverForm({ onClose, onSave }: AddDriverFormProps) {
                         disabled={!isValid}
                         className={cn("h-14 rounded-xl font-bold text-base mt-1 transition-all", saved ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground")}
                     >
-                        {saved ? <><Check className="mr-2 h-5 w-5" />Driver Added!</> : "Save Driver"}
+                        {saved ? (
+                            <><Check className="mr-2 h-5 w-5" />{initialData ? "Driver Updated!" : "Driver Added!"}</>
+                        ) : (
+                            initialData ? "Update Driver" : "Save Driver"
+                        )}
                     </Button>
                 </div>
             </div>

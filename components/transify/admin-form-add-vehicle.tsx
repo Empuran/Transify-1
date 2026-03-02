@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { X, Bus, Users, Hash, Check, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 interface AddVehicleFormProps {
+    initialData?: any
     onClose: () => void
     onSave: (data: VehicleData) => void
 }
@@ -21,23 +22,67 @@ export interface VehicleData {
 
 const vehicleTypes = ["School Bus", "Mini Bus", "Van", "Car", "Shuttle"]
 const fuelTypes = ["Diesel", "Petrol", "CNG", "Electric", "Hybrid"]
-const driverOptions = ["Rajesh Kumar", "Suresh Patel", "Amit Singh", "Pradeep Rao", "Vijay Kumar", "Unassigned"]
 
-export function AddVehicleForm({ onClose, onSave }: AddVehicleFormProps) {
+export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormProps) {
     const [data, setData] = useState<VehicleData>({
-        plateNumber: "", type: "", capacity: "", driverName: "", fuelType: "",
+        plateNumber: initialData?.plate_number || initialData?.plateNumber || "",
+        type: initialData?.type || "",
+        capacity: initialData?.capacity || "",
+        driverName: initialData?.driver_name || initialData?.driverName || "",
+        fuelType: initialData?.fuel_type || initialData?.fuelType || "",
     })
     const [showType, setShowType] = useState(false)
     const [showFuel, setShowFuel] = useState(false)
     const [showDriver, setShowDriver] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [driverOptions, setDriverOptions] = useState<string[]>(["Unassigned"])
+
+    // Fetch real drivers from Firestore
+    useEffect(() => {
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+        if (!orgId) return
+        fetch(`/api/drivers/list?organization_id=${orgId}`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.drivers) {
+                    const names = d.drivers.map((dr: any) => dr.name)
+                    setDriverOptions([...names, "Unassigned"])
+                }
+            }).catch(() => { })
+    }, [])
 
     const isValid = data.plateNumber.trim() && data.type && data.capacity.trim()
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!isValid) return
-        setSaved(true)
-        setTimeout(() => { onSave(data); onClose() }, 800)
+
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+
+        if (!orgId) { alert("Organization not found. Please log in again."); return }
+
+        try {
+            const endpoint = initialData ? "/api/vehicles/update" : "/api/vehicles/add"
+            const payload = initialData
+                ? { ...data, vehicle_id: initialData.id, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+                : { ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            })
+            const result = await res.json()
+            if (!res.ok) throw new Error(result.error)
+
+            setSaved(true)
+            setTimeout(() => { onSave(data); onClose() }, 800)
+        } catch (err: any) {
+            alert(err.message || `Failed to ${initialData ? "update" : "add"} vehicle`)
+        }
     }
 
     return (
@@ -51,8 +96,8 @@ export function AddVehicleForm({ onClose, onSave }: AddVehicleFormProps) {
                             <Bus className="h-5 w-5 text-primary" />
                         </div>
                         <div>
-                            <h2 className="text-base font-bold text-foreground">Add Vehicle</h2>
-                            <p className="text-xs text-muted-foreground">Register a new vehicle</p>
+                            <h2 className="text-base font-bold text-foreground">{initialData ? "Edit Vehicle" : "Add Vehicle"}</h2>
+                            <p className="text-xs text-muted-foreground">{initialData ? "Update vehicle details" : "Register a new vehicle"}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
@@ -153,7 +198,11 @@ export function AddVehicleForm({ onClose, onSave }: AddVehicleFormProps) {
                         disabled={!isValid}
                         className={cn("h-14 rounded-xl font-bold text-base mt-1 transition-all", saved ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground")}
                     >
-                        {saved ? <><Check className="mr-2 h-5 w-5" />Vehicle Added!</> : "Save Vehicle"}
+                        {saved ? (
+                            <><Check className="mr-2 h-5 w-5" />{initialData ? "Vehicle Updated!" : "Vehicle Added!"}</>
+                        ) : (
+                            initialData ? "Update Vehicle" : "Save Vehicle"
+                        )}
                     </Button>
                 </div>
             </div>

@@ -1,22 +1,25 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import {
   Bus, Users, AlertTriangle, Clock, Activity, Plus, ChevronRight,
   Search, Download, Route, UserPlus, BarChart3, TrendingUp,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown, ShieldCheck,
+  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
+import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 import { AddStudentForm } from "./admin-form-add-student"
 import { AddDriverForm } from "./admin-form-add-driver"
 import { AddVehicleForm } from "./admin-form-add-vehicle"
 import { AddRouteForm } from "./admin-form-add-route"
 import { AdminManagement } from "./admin-management"
+import { LiveMap } from "./live-map"
 import { useRouter } from "next/navigation"
 
 type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
@@ -24,30 +27,10 @@ type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
-const vehiclesData = [
-  { id: "KA-01-AB-1234", route: "Route A12 – Koramangala", driver: "Rajesh Kumar", status: "on-time", members: 18, speed: "42 km/h", progress: 68, type: "School Bus" },
-  { id: "KA-05-CD-5678", route: "Route B5 – Indiranagar", driver: "Suresh Patel", status: "delayed", members: 15, speed: "28 km/h", progress: 35, type: "Van" },
-  { id: "KA-09-EF-9012", route: "Route C3 – HSR Layout", driver: "Amit Singh", status: "on-time", members: 20, speed: "38 km/h", progress: 82, type: "School Bus" },
-  { id: "KA-12-GH-3456", route: "Route D7 – Whitefield", driver: "Pradeep Rao", status: "on-time", members: 12, speed: "45 km/h", progress: 51, type: "Mini Bus" },
-  { id: "KA-03-IJ-7890", route: "Route E1 – Jayanagar", driver: "Vijay Kumar", status: "emergency", members: 16, speed: "0 km/h", progress: 20, type: "School Bus" },
-]
+// vehiclesData, driversData, studentsData, and routesData are now fetched from Firestore 
+// see useEffects inside AdminDashboard component
 
-const studentsData = [
-  { name: "Aarav Sharma", grade: "Class 7", memberId: "MBR-001", route: "Route A12", status: "on-bus", dept: "Engineering" },
-  { name: "Priya Nair", grade: "Class 5", memberId: "MBR-002", route: "Route B5", status: "at-home", dept: "Design" },
-  { name: "Kiran Reddy", grade: "Class 9", memberId: "MBR-003", route: "Route C3", status: "on-bus", dept: "Marketing" },
-  { name: "Sneha Patel", grade: "Class 6", memberId: "MBR-004", route: "Route D7", status: "at-school", dept: "Engineering" },
-  { name: "Rahul Mehta", grade: "Class 8", memberId: "MBR-005", route: "Route A12", status: "on-bus", dept: "HR" },
-  { name: "Ananya Singh", grade: "Class 4", memberId: "MBR-006", route: "Route C3", status: "at-home", dept: "Finance" },
-]
-
-const driversData = [
-  { name: "Rajesh Kumar", phone: "+91 98765 43210", license: "DL-HMV-2019", vehicle: "KA-01-AB-1234", score: 4.8, status: "on-duty", licenseType: "HMV" },
-  { name: "Suresh Patel", phone: "+91 97654 32109", license: "DL-HMV-2020", vehicle: "KA-05-CD-5678", score: 4.5, status: "on-duty", licenseType: "HMV" },
-  { name: "Amit Singh", phone: "+91 96543 21098", license: "DL-PSV-2018", vehicle: "KA-09-EF-9012", score: 4.9, status: "on-duty", licenseType: "PSV" },
-  { name: "Pradeep Rao", phone: "+91 95432 10987", license: "DL-HMV-2021", vehicle: "KA-12-GH-3456", score: 4.3, status: "off-duty", licenseType: "HMV" },
-  { name: "Vijay Kumar", phone: "+91 94321 09876", license: "DL-HTV-2017", vehicle: "KA-03-IJ-7890", score: 3.9, status: "on-duty", licenseType: "HTV" },
-]
+// driversData is now fetched from Firestore — see useEffect inside AdminDashboard
 
 // ── Status Badge ──────────────────────────────────────────────────────────────
 
@@ -111,11 +94,33 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
+// ── Vehicle Icon Helper ────────────────────────────────────────────────────
+const getVehicleIcon = (type: string = "") => {
+  const t = type.toLowerCase()
+  if (t.includes("car")) return Car
+  if (t.includes("van")) return Truck
+  if (t.includes("mini") || t.includes("shuttle")) return Truck
+  return Bus
+}
+
 export function AdminDashboard() {
   const { profile, logoutMock, adminSession } = useAuth()
   const router = useRouter()
   const [section, setSection] = useState<ActiveSection>("overview")
   const [activeForm, setActiveForm] = useState<ActiveForm>(null)
+
+  // ── Editing States ──────────────────────────────────────────────────────
+  const [editingDriver, setEditingDriver] = useState<any>(null)
+  const [editingVehicle, setEditingVehicle] = useState<any>(null)
+  const [editingRoute, setEditingRoute] = useState<any>(null)
+
+  // ── Date Filtering ──────────────────────────────────────────────────────
+  const [dashboardDate, setDashboardDate] = useState<string>(new Date().toISOString().split("T")[0])
+
+  // ── Notifications ───────────────────────────────────────────────────────
+  const [notifications, setNotifications] = useState<any[]>([])
+  const [showNotifications, setShowNotifications] = useState(false)
+
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -139,6 +144,26 @@ export function AdminDashboard() {
   const [memberRouteFilter, setMemberRouteFilter] = useState("all")
   const [memberStatusFilter, setMemberStatusFilter] = useState("all")
   const [memberGradeFilter, setMemberGradeFilter] = useState("all")
+  const [studentsData, setStudentsData] = useState<any[]>([])
+
+  const fetchStudents = useCallback(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return () => { }
+    const q = query(
+      collection(db, "students"),
+      where("organization_id", "==", orgId)
+    )
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const students = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setStudentsData(students)
+    }, (err) => console.error("Firestore student listener error:", err))
+    return unsubscribe
+  }, [adminSession?.organization_id])
+
+  useEffect(() => {
+    const unsub = fetchStudents()
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [fetchStudents])
 
   const filteredMembers = useMemo(() => studentsData.filter(s =>
     (s.name.toLowerCase().includes(memberSearch.toLowerCase()) || s.memberId.toLowerCase().includes(memberSearch.toLowerCase())) &&
@@ -151,35 +176,135 @@ export function AdminDashboard() {
   const [driverSearch, setDriverSearch] = useState("")
   const [driverStatusFilter, setDriverStatusFilter] = useState("all")
   const [driverLicenseFilter, setDriverLicenseFilter] = useState("all")
+  const [driversData, setDriversData] = useState<any[]>([])
 
-  const filteredDrivers = useMemo(() => driversData.filter(d =>
-    (d.name.toLowerCase().includes(driverSearch.toLowerCase()) || d.phone.includes(driverSearch)) &&
+  const fetchDrivers = useCallback(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return () => { }
+    const q = query(
+      collection(db, "drivers"),
+      where("organization_id", "==", orgId)
+    )
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const drivers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setDriversData(drivers)
+    }, (err) => console.error("Firestore driver listener error:", err))
+    return unsubscribe
+  }, [adminSession?.organization_id])
+
+  useEffect(() => {
+    const unsub = fetchDrivers()
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [fetchDrivers])
+
+  const filteredDrivers = useMemo(() => driversData.filter((d: any) =>
+    (d.name?.toLowerCase().includes(driverSearch.toLowerCase()) || d.phone?.includes(driverSearch)) &&
     (driverStatusFilter === "all" || d.status === driverStatusFilter) &&
-    (driverLicenseFilter === "all" || d.licenseType === driverLicenseFilter)
-  ), [driverSearch, driverStatusFilter, driverLicenseFilter])
+    (driverLicenseFilter === "all" || d.license_type === driverLicenseFilter)
+  ), [driverSearch, driverStatusFilter, driverLicenseFilter, driversData])
 
   // ── Vehicle Filters ─────────────────────────────────────────────────────
   const [vehicleSearch, setVehicleSearch] = useState("")
   const [vehicleStatusFilter, setVehicleStatusFilter] = useState("all")
   const [vehicleTypeFilter, setVehicleTypeFilter] = useState("all")
+  const [vehiclesData, setVehiclesData] = useState<any[]>([])
 
-  const filteredVehicles = useMemo(() => vehiclesData.filter(v =>
-    (v.id.toLowerCase().includes(vehicleSearch.toLowerCase()) || v.driver.toLowerCase().includes(vehicleSearch.toLowerCase())) &&
+  const fetchVehicles = useCallback(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return () => { }
+
+    const q = query(
+      collection(db, "vehicles"),
+      where("organization_id", "==", orgId)
+    )
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      // Manual sort by created_at since combined queries might need indexes
+      vehicles.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      setVehiclesData(vehicles)
+    }, (err) => {
+      console.error("Firestore vehicle listener error:", err)
+    })
+
+    return unsubscribe
+  }, [adminSession?.organization_id])
+
+  useEffect(() => {
+    const unsub = fetchVehicles()
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [fetchVehicles])
+
+  const filteredVehicles = useMemo(() => vehiclesData.filter((v: any) =>
+    ((v.plate_number || v.id || "").toLowerCase().includes(vehicleSearch.toLowerCase()) || (v.driver_name || "").toLowerCase().includes(vehicleSearch.toLowerCase())) &&
     (vehicleStatusFilter === "all" || v.status === vehicleStatusFilter) &&
     (vehicleTypeFilter === "all" || v.type === vehicleTypeFilter)
-  ), [vehicleSearch, vehicleStatusFilter, vehicleTypeFilter])
+  ), [vehicleSearch, vehicleStatusFilter, vehicleTypeFilter, vehiclesData])
 
   // ── Route Filters ───────────────────────────────────────────────────────
   const [routeSearch, setRouteSearch] = useState("")
-  const filteredRoutes = useMemo(() => vehiclesData.filter(v =>
-    v.route.toLowerCase().includes(routeSearch.toLowerCase()) || v.id.toLowerCase().includes(routeSearch.toLowerCase())
-  ), [routeSearch])
+  const [routesData, setRoutesData] = useState<any[]>([])
+
+  const fetchRoutes = useCallback(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return () => { }
+    const q = query(
+      collection(db, "routes"),
+      where("organization_id", "==", orgId)
+    )
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const routes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setRoutesData(routes)
+    }, (err) => console.error("Firestore route listener error:", err))
+    return unsubscribe
+  }, [adminSession?.organization_id])
+
+  useEffect(() => {
+    const unsub = fetchRoutes()
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [fetchRoutes])
+
+  // ── One-time backfill: sync vehicle route fields for existing data ──────
+  useEffect(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return
+    fetch("/api/routes/sync-vehicles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ organization_id: orgId }),
+    }).then(r => r.json()).then(d => {
+      if (d.updated > 0) console.log(`✅ Route-vehicle sync: ${d.message}`)
+    }).catch(() => { })
+  }, [adminSession?.organization_id])
+
+  const filteredRoutes = useMemo(() => routesData.filter((r: any) =>
+    (r.route_name || "").toLowerCase().includes(routeSearch.toLowerCase()) ||
+    (r.vehicle_id || "").toLowerCase().includes(routeSearch.toLowerCase())
+  ), [routeSearch, routesData])
+
+  // ── Notifications Listener ───────────────────────────────────────────────────
+  useEffect(() => {
+    const orgId = adminSession?.organization_id
+    if (!orgId) return
+    // No orderBy to avoid composite index requirement — sort in-memory instead
+    const q = query(
+      collection(db, "notifications"),
+      where("organization_id", "==", orgId)
+    )
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const notifs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      // Sort newest first in memory
+      notifs.sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+      setNotifications(notifs)
+    })
+    return unsubscribe
+  }, [adminSession?.organization_id])
 
   // ── Tracking Filters ────────────────────────────────────────────────────
   const [trackStatus, setTrackStatus] = useState("all")
-  const filteredTracking = useMemo(() => vehiclesData.filter(v =>
+  const filteredTracking = useMemo(() => vehiclesData.filter((v: any) =>
     trackStatus === "all" || v.status === trackStatus
-  ), [trackStatus])
+  ), [trackStatus, vehiclesData])
 
   const navGroups: { group: string; items: { id: ActiveSection; label: string; icon: React.ElementType }[] }[] = [
     {
@@ -283,10 +408,56 @@ export function AdminDashboard() {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input placeholder="Search anything..." className="h-9 w-60 rounded-lg border-border bg-background pl-9 text-sm" />
             </div>
-            <button className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background">
-              <Bell className="h-4 w-4 text-foreground" />
-              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-destructive-foreground">3</span>
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background hover:bg-muted transition-colors"
+              >
+                <Bell className="h-4 w-4 text-foreground" />
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white">
+                    {notifications.filter(n => !n.read).length}
+                  </span>
+                )}
+              </button>
+
+              {showNotifications && (
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notifications</h3>
+                    <button className="text-[10px] font-bold text-primary hover:underline">Mark all as read</button>
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    {notifications.map((n) => (
+                      <div key={n.id} className={cn("border-b border-border/50 px-4 py-3 transition-colors hover:bg-secondary/50", !n.read && "bg-primary/5")}>
+                        <div className="flex items-start gap-3">
+                          <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
+                            n.type === 'sos' ? 'bg-destructive/10 text-destructive' :
+                              n.type === 'delay' ? 'bg-warning/10 text-warning' : 'bg-primary/10 text-primary'
+                          )}>
+                            {n.type === 'sos' ? <AlertTriangle className="h-4 w-4" /> :
+                              n.type === 'delay' ? <Clock className="h-4 w-4" /> : <Bus className="h-4 w-4" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-foreground leading-tight">{n.title}</p>
+                            <p className="mt-1 text-xs text-muted-foreground leading-snug">{n.message}</p>
+                            <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+                              {new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {notifications.length === 0 && (
+                      <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+                        <Bell className="h-8 w-8 opacity-20" />
+                        <p className="text-xs">No notifications yet</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
               <span className="text-sm font-bold text-primary">{initials}</span>
             </div>
@@ -304,18 +475,29 @@ export function AdminDashboard() {
                   <h1 className="text-2xl font-bold text-foreground">Good evening, {userName.split(" ")[0]} 👋</h1>
                   <p className="text-sm text-muted-foreground mt-1">Here's your fleet overview for today.</p>
                 </div>
-                <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
-                  <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
-                  Live · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" })}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      type="date"
+                      value={dashboardDate}
+                      onChange={(e) => setDashboardDate(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
+                    <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                    Live · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" })}
+                  </div>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                 {[
-                  { label: "Total Vehicles", value: "24", sub: "+2 this month", icon: Bus, color: "text-primary", bg: "bg-primary/10", trend: "up" },
-                  { label: "Active Trips", value: "18", sub: "of 24 vehicles", icon: Activity, color: "text-success", bg: "bg-success/10", trend: "up" },
-                  { label: "Delayed Trips", value: "3", sub: "-1 vs yesterday", icon: Clock, color: "text-warning", bg: "bg-warning/10", trend: "down" },
-                  { label: "SOS Alerts", value: "1", sub: "1 active now", icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", trend: "neutral" },
+                  { label: "Total Vehicles", value: vehiclesData.length.toString(), sub: `${vehiclesData.length} in fleet`, icon: Bus, color: "text-primary", bg: "bg-primary/10", trend: "neutral" },
+                  { label: "Active Trips", value: vehiclesData.filter(v => v.status === "on-time").length.toString(), sub: `of ${vehiclesData.length} vehicles`, icon: Activity, color: "text-success", bg: "bg-success/10", trend: "up" },
+                  { label: "Delayed Trips", value: vehiclesData.filter(v => v.status === "delayed").length.toString(), sub: "real-time check", icon: Clock, color: "text-warning", bg: "bg-warning/10", trend: "down" },
+                  { label: "SOS Alerts", value: vehiclesData.filter(v => v.status === "emergency").length.toString(), sub: "0 active now", icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", trend: "neutral" },
                 ].map((card, i) => {
                   const Icon = card.icon
                   return (
@@ -339,43 +521,39 @@ export function AdminDashboard() {
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
                   <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
                   <div className="flex flex-col gap-4">
-                    {[
-                      { icon: CheckCircle2, color: "text-success", bg: "bg-success/10", text: "Route A12 completed morning trip", time: "5m ago" },
-                      { icon: Clock, color: "text-warning", bg: "bg-warning/10", text: "Route B5 reported 8 min delay", time: "15m ago" },
-                      { icon: UserPlus, color: "text-primary", bg: "bg-primary/10", text: "New driver Vijay Kumar onboarded", time: "1h ago" },
-                      { icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", text: "SOS triggered on Route E1", time: "2h ago" },
-                      { icon: Bus, color: "text-teal", bg: "bg-teal/10", text: "Vehicle KA-12-GH-3456 serviced", time: "3h ago" },
-                    ].map((item, i) => {
-                      const Icon = item.icon; return (
-                        <div key={i} className="flex items-start gap-3">
-                          <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", item.bg)}>
-                            <Icon className={cn("h-4 w-4", item.color)} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-foreground">{item.text}</p>
-                            <p className="text-xs text-muted-foreground">{item.time}</p>
-                          </div>
+                    {driversData.slice(0, 5).map((d: any, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10")}>
+                          <UserPlus className={cn("h-4 w-4 text-primary")} />
                         </div>
-                      )
-                    })}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground">{d.name} onboarded</p>
+                          <p className="text-xs text-muted-foreground">{new Date(d.created_at || Date.now()).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {driversData.length === 0 && <p className="text-xs text-muted-foreground italic">No recent activity found.</p>}
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
                   <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Fleet Status</h3>
                   <div className="flex flex-col gap-3">
-                    {vehiclesData.map((v) => (
+                    {vehiclesData.slice(0, 5).map((v: any) => (
                       <div key={v.id} className="flex items-center gap-3">
                         <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
                           v.status === "on-time" ? "bg-success/10" : v.status === "delayed" ? "bg-warning/10" : "bg-destructive/10"
                         )}>
-                          <Bus className={cn("h-4 w-4",
-                            v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
-                          )} />
+                          {(() => {
+                            const Icon = getVehicleIcon(v.type);
+                            return <Icon className={cn("h-4 w-4",
+                              v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
+                            )} />;
+                          })()}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold text-foreground">{v.id}</span>
+                            <span className="text-xs font-semibold text-foreground">{v.plate_number || v.id}</span>
                             <StatusBadge status={v.status} />
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -443,34 +621,8 @@ export function AdminDashboard() {
                       ))}
                     </div>
                   </div>
-                  <div className="relative h-80">
-                    <svg className="absolute inset-0 h-full w-full bg-muted/30" xmlns="http://www.w3.org/2000/svg">
-                      <defs>
-                        <pattern id="adminGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-                          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--border)" strokeWidth="0.8" />
-                        </pattern>
-                      </defs>
-                      <rect width="100%" height="100%" fill="url(#adminGrid)" />
-                      <line x1="0" y1="160" x2="100%" y2="160" stroke="var(--muted)" strokeWidth="3" />
-                      <line x1="200" y1="0" x2="200" y2="100%" stroke="var(--muted)" strokeWidth="3" />
-                      <line x1="450" y1="0" x2="450" y2="100%" stroke="var(--muted)" strokeWidth="3" />
-                    </svg>
-                    {[
-                      { x: "18%", y: "28%", s: "on-time", label: "A12" },
-                      { x: "42%", y: "58%", s: "delayed", label: "B5" },
-                      { x: "68%", y: "22%", s: "on-time", label: "C3" },
-                      { x: "33%", y: "72%", s: "on-time", label: "D7" },
-                      { x: "78%", y: "62%", s: "emergency", label: "E1" },
-                    ].filter(v => trackStatus === "all" || v.s === trackStatus).map((v, i) => (
-                      <div key={i} className="absolute" style={{ left: v.x, top: v.y, transform: "translate(-50%,-50%)" }}>
-                        <div className={cn("flex h-9 w-9 items-center justify-center rounded-full shadow-lg border-2 border-white",
-                          v.s === "on-time" ? "bg-success" : v.s === "delayed" ? "bg-warning" : "bg-destructive"
-                        )}>
-                          <Bus className="h-4 w-4 text-white" />
-                        </div>
-                        <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] font-bold text-foreground bg-card rounded px-1 shadow">{v.label}</span>
-                      </div>
-                    ))}
+                  <div className="relative h-[400px] w-full bg-muted/20">
+                    <LiveMap organizationId={adminSession?.organization_id} />
                   </div>
                 </div>
 
@@ -482,13 +634,16 @@ export function AdminDashboard() {
                           <div className={cn("flex h-8 w-8 items-center justify-center rounded-xl",
                             v.status === "on-time" ? "bg-success/10" : v.status === "delayed" ? "bg-warning/10" : "bg-destructive/10"
                           )}>
-                            <Bus className={cn("h-4 w-4",
-                              v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
-                            )} />
+                            {(() => {
+                              const Icon = getVehicleIcon(v.type);
+                              return <Icon className={cn("h-4 w-4",
+                                v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
+                              )} />;
+                            })()}
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-foreground">{v.id}</p>
-                            <p className="text-[10px] text-muted-foreground">{v.driver}</p>
+                            <p className="text-xs font-bold text-foreground">{v.plate_number || v.route || v.id}</p>
+                            <p className="text-[10px] text-muted-foreground">{v.driver || "No driver assigned"}</p>
                           </div>
                         </div>
                         <StatusBadge status={v.status} />
@@ -609,7 +764,7 @@ export function AdminDashboard() {
                   <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10">
-                        <span className="text-sm font-bold text-primary">{d.name.split(" ").map(n => n[0]).join("")}</span>
+                        <span className="text-sm font-bold text-primary">{d.name?.split(" ").map((n: string) => n[0]).join("")}</span>
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-bold text-foreground truncate">{d.name}</p>
@@ -618,14 +773,29 @@ export function AdminDashboard() {
                     </div>
                     <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
                       <span>{d.phone}</span>
-                      <span>License: <span className="font-semibold text-foreground">{d.license}</span> ({d.licenseType})</span>
-                      <span>Vehicle: <span className="font-semibold text-foreground">{d.vehicle}</span></span>
+                      <span>License: <span className="font-semibold text-foreground">{d.license_number}</span> ({d.license_type})</span>
+                      <span>Vehicle: <span className="font-semibold text-foreground">{d.vehicle_id || "Unassigned"}</span></span>
                     </div>
-                    <div className="mt-3 flex items-center gap-1">
-                      {[1, 2, 3, 4, 5].map(s => (
-                        <div key={s} className={cn("h-1.5 flex-1 rounded-full", s <= Math.floor(d.score) ? "bg-warning" : "bg-muted")} />
-                      ))}
-                      <span className="ml-1 text-xs font-bold text-warning">{d.score}</span>
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-1 flex-1">
+                        {[1, 2, 3, 4, 5].map(s => (
+                          <div key={s} className={cn("h-1.5 flex-1 rounded-full", s <= Math.floor(d.score || 0) ? "bg-warning" : "bg-muted")} />
+                        ))}
+                        <span className="ml-1 text-xs font-bold text-warning">{d.score || "-"}</span>
+                      </div>
+                      <div className="flex items-center gap-1 ml-2">
+                        <button onClick={() => setEditingDriver(d)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                        <button onClick={() => {
+                          if (confirm(`Delete driver "${d.name}"?`)) {
+                            fetch("/api/drivers/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id }) })
+                              .then(() => { showToast("Driver deleted"); fetchDrivers() })
+                          }
+                        }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -678,21 +848,36 @@ export function AdminDashboard() {
                           )} />
                         </div>
                         <div>
-                          <p className="text-sm font-bold font-mono text-foreground">{v.id}</p>
+                          <p className="text-sm font-bold font-mono text-foreground">{v.plate_number || v.id}</p>
                           <p className="text-xs text-muted-foreground">{v.type}</p>
                         </div>
                       </div>
                       <StatusBadge status={v.status} />
                     </div>
                     <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                      <span><Route className="inline h-3 w-3 mr-1" />{v.route}</span>
-                      <span><Users className="inline h-3 w-3 mr-1" />{v.members} {memberLabel.toLowerCase()}</span>
-                      <span><Navigation className="inline h-3 w-3 mr-1" />{v.speed}</span>
+                      <span><Route className="inline h-3 w-3 mr-1" />{v.route || "No route"}</span>
+                      <span><Users className="inline h-3 w-3 mr-1" />{v.capacity || 0} seats</span>
+                      <span><Navigation className="inline h-3 w-3 mr-1" />{v.driver_name || "Unassigned"}</span>
                     </div>
-                    <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div className={cn("h-full rounded-full",
-                        v.status === "on-time" ? "bg-success" : v.status === "delayed" ? "bg-warning" : "bg-destructive"
-                      )} style={{ width: `${v.progress}%` }} />
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div className={cn("h-full rounded-full",
+                          v.status === "on-time" ? "bg-success" : v.status === "delayed" ? "bg-warning" : "bg-destructive"
+                        )} style={{ width: `${v.progress || 50}%` }} />
+                      </div>
+                      <div className="flex items-center gap-1 ml-2">
+                        <button onClick={() => setEditingVehicle(v)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                        <button onClick={() => {
+                          if (confirm(`Delete vehicle "${v.plate_number || v.id}"?`)) {
+                            fetch("/api/vehicles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vehicle_id: v.id }) })
+                              .then(() => { showToast("Vehicle deleted"); fetchVehicles() })
+                          }
+                        }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -737,14 +922,32 @@ export function AdminDashboard() {
                         <Route className="h-5 w-5 text-primary" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-foreground">{v.route}</p>
-                        <p className="text-xs text-muted-foreground">Assigned: {v.id}</p>
+                        <p className="text-sm font-bold text-foreground">{v.route_name}</p>
+                        <p className="text-xs text-muted-foreground">Vehicle: {v.vehicle_id || "Unassigned"}</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-3 gap-3 text-center">
-                      <div className="rounded-xl bg-muted/50 p-2"><p className="text-lg font-bold text-foreground">{v.members}</p><p className="text-[10px] text-muted-foreground">{memberLabel}</p></div>
-                      <div className="rounded-xl bg-muted/50 p-2"><p className="text-lg font-bold text-foreground">4</p><p className="text-[10px] text-muted-foreground">Stops</p></div>
-                      <div className="rounded-xl bg-muted/50 p-2"><p className="text-lg font-bold text-foreground">12km</p><p className="text-[10px] text-muted-foreground">Distance</p></div>
+                      <div className="rounded-xl bg-muted/50 p-2">
+                        <p className="text-lg font-bold text-foreground">{(v.stops || []).length}</p>
+                        <p className="text-[10px] text-muted-foreground">Stops</p>
+                      </div>
+                      <div className="rounded-xl bg-muted/50 p-2">
+                        <p className="text-lg font-bold text-foreground">{v.distance_km || "0"}km</p>
+                        <p className="text-[10px] text-muted-foreground">Distance</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-end gap-1">
+                      <button onClick={() => setEditingRoute(v)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                        <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                      <button onClick={() => {
+                        if (confirm(`Delete route "${v.route_name}"?`)) {
+                          fetch("/api/routes/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ route_id: v.id }) })
+                            .then(() => { showToast("Route deleted"); fetchRoutes() })
+                        }
+                      }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -767,9 +970,9 @@ export function AdminDashboard() {
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
                 {[
-                  { v: "91%", l: "On-Time Rate", sub: "+3% vs last month", color: "text-success" },
-                  { v: "4.6", l: "Avg Driver Score", sub: "Out of 5.0", color: "text-warning" },
-                  { v: "156", l: "Trips Today", sub: "Across 24 vehicles", color: "text-primary" },
+                  { v: "100%", l: "On-Time Rate", sub: "Based on active fleet", color: "text-success" },
+                  { v: "4.8", l: "Avg Driver Score", sub: "Out of 5.0", color: "text-warning" },
+                  { v: vehiclesData.filter((v: any) => v.status === "on-time").length.toString(), l: "Trips Today", sub: `Across ${vehiclesData.length} vehicles`, color: "text-primary" },
                 ].map((s, i) => (
                   <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm text-center">
                     <p className={cn("text-4xl font-black", s.color)}>{s.v}</p>
@@ -803,8 +1006,8 @@ export function AdminDashboard() {
             <div className="flex flex-col gap-6 max-w-2xl">
               <h1 className="text-2xl font-bold text-foreground">Settings</h1>
               {[
-                { label: "Organization Name", value: "Delhi Public School", type: "text" },
-                { label: "Admin Email", value: "admin@dps.edu.in", type: "email" },
+                { label: "Organization Name", value: adminSession?.organization_name || "Delhi Public School", type: "text" },
+                { label: "Admin Email", value: adminSession?.email || "admin@dps.edu.in", type: "email" },
                 { label: "Timezone", value: "Asia/Kolkata (IST)", type: "text" },
               ].map((field, i) => (
                 <div key={i} className="flex flex-col gap-1.5">
@@ -834,9 +1037,27 @@ export function AdminDashboard() {
 
       {/* Forms */}
       {activeForm === "student" && <AddStudentForm isCorporate={isCorporate} onClose={() => setActiveForm(null)} onSave={() => showToast(`${memberLabel.slice(0, -1)} added successfully`)} />}
-      {activeForm === "driver" && <AddDriverForm onClose={() => setActiveForm(null)} onSave={() => showToast("Driver onboarded successfully")} />}
-      {activeForm === "vehicle" && <AddVehicleForm onClose={() => setActiveForm(null)} onSave={() => showToast("Vehicle registered successfully")} />}
-      {activeForm === "route" && <AddRouteForm onClose={() => setActiveForm(null)} onSave={() => showToast("Route created successfully")} />}
+      {(activeForm === "driver" || editingDriver) && (
+        <AddDriverForm
+          initialData={editingDriver}
+          onClose={() => { setActiveForm(null); setEditingDriver(null) }}
+          onSave={() => { showToast(editingDriver ? "Driver updated successfully" : "Driver onboarded successfully"); fetchDrivers() }}
+        />
+      )}
+      {(activeForm === "vehicle" || editingVehicle) && (
+        <AddVehicleForm
+          initialData={editingVehicle}
+          onClose={() => { setActiveForm(null); setEditingVehicle(null) }}
+          onSave={() => { showToast(editingVehicle ? "Vehicle updated successfully" : "Vehicle registered successfully"); fetchVehicles() }}
+        />
+      )}
+      {(activeForm === "route" || editingRoute) && (
+        <AddRouteForm
+          initialData={editingRoute}
+          onClose={() => { setActiveForm(null); setEditingRoute(null) }}
+          onSave={() => { showToast(editingRoute ? "Route updated successfully" : "Route created successfully"); fetchRoutes() }}
+        />
+      )}
 
       {/* Toast */}
       {toastMsg && (

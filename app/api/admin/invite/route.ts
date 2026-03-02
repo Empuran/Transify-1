@@ -5,7 +5,7 @@ import { randomUUID } from "crypto";
 
 export async function POST(req: NextRequest) {
     try {
-        const { email, role, organization_id, invited_by_user_id } = await req.json();
+        const { email, role, organization_id, invited_by_user_id, base_url } = await req.json();
 
         if (!email || !role || !organization_id || !invited_by_user_id) {
             return NextResponse.json(
@@ -87,9 +87,21 @@ export async function POST(req: NextRequest) {
             // fallback to default name
         }
 
-        // 7. Build accept URL and send real email
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-        const acceptUrl = `${appUrl}/accept-invite?token=${inviteToken}&email=${encodeURIComponent(email.toLowerCase())}`;
+        // 7. Build accept URL — use base_url from browser (most reliable), fallback to request host
+        let appBase: string;
+        if (base_url) {
+            // Best: the exact origin the admin's browser is on
+            appBase = base_url;
+        } else {
+            // Fallback: detect from request headers (works for true reverse proxies)
+            const reqUrl = new URL(req.url);
+            const forwardedHost = req.headers.get("x-forwarded-host");
+            const forwardedProto = req.headers.get("x-forwarded-proto") || (forwardedHost ? "https" : "http");
+            const host = forwardedHost || req.headers.get("host") || reqUrl.host;
+            appBase = `${forwardedProto}://${host}`;
+        }
+        const acceptUrl = `${appBase}/accept-invite?token=${inviteToken}&email=${encodeURIComponent(email.toLowerCase())}`;
+        console.log(`📧 Accept URL: ${acceptUrl}`);
 
         try {
             await sendAdminInviteEmail({
@@ -102,31 +114,20 @@ export async function POST(req: NextRequest) {
             console.log(`✅ Invite email sent to ${email}`);
         } catch (emailError: any) {
             console.error("⚠️ Email send failed (invite still created):", emailError.message);
-            // Don't fail the whole request — the invite record is created
-            // The admin can share the link manually if email fails
             return NextResponse.json({
                 success: true,
                 message: `Invite created for ${email}, but email delivery failed. Share the link manually.`,
                 email_error: emailError.message,
                 accept_url: acceptUrl,
-                invite: {
-                    email: email.toLowerCase(),
-                    role,
-                    status: "INVITED",
-                    expires_at: expiresAt,
-                },
+                invite: { email: email.toLowerCase(), role, status: "INVITED", expires_at: expiresAt },
             });
         }
 
         return NextResponse.json({
             success: true,
             message: `Invite email sent to ${email}`,
-            invite: {
-                email: email.toLowerCase(),
-                role,
-                status: "INVITED",
-                expires_at: expiresAt,
-            },
+            accept_url: acceptUrl,
+            invite: { email: email.toLowerCase(), role, status: "INVITED", expires_at: expiresAt },
         });
     } catch (error: any) {
         console.error("Invite admin error:", error);

@@ -27,10 +27,11 @@ interface AdminUserData {
 
 interface AuditLogData {
     id: string
-    action_type: string
-    performed_by_email: string
-    target_user_id?: string
-    details?: string
+    action: string
+    entity_type: string
+    entity_id: string
+    admin_email: string
+    details: string
     timestamp: string
 }
 
@@ -50,6 +51,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     const [inviteEmail, setInviteEmail] = useState("")
     const [inviteRole, setInviteRole] = useState<AdminRole>("ADMIN")
     const [inviting, setInviting] = useState(false)
+    const [inviteAcceptUrl, setInviteAcceptUrl] = useState<string | null>(null)
 
     // Search + filters
     const [searchQuery, setSearchQuery] = useState("")
@@ -61,6 +63,10 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
     // Tab
     const [activeTab, setActiveTab] = useState<"admins" | "audit">("admins")
+
+    // Log Filtering
+    const [logStartDate, setLogStartDate] = useState("")
+    const [logEndDate, setLogEndDate] = useState("")
 
     const isSuperAdmin = adminSession.role === "SUPER_ADMIN"
 
@@ -79,7 +85,12 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
     const fetchAuditLogs = useCallback(async () => {
         try {
-            const res = await fetch(`/api/admin/audit-logs?organization_id=${adminSession.organization_id}&limit=30`)
+            const orgId = adminSession.organization_id
+            let url = `/api/admin/audit-logs?organization_id=${orgId}&limit=100`
+            if (logStartDate) url += `&start_date=${logStartDate}`
+            if (logEndDate) url += `&end_date=${logEndDate}`
+
+            const res = await fetch(url)
             if (res.ok) {
                 const data = await res.json()
                 setAuditLogs(data.logs || [])
@@ -87,7 +98,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         } catch (err) {
             console.error("Failed to fetch audit logs:", err)
         }
-    }, [adminSession.organization_id])
+    }, [adminSession.organization_id, logStartDate, logEndDate])
 
     useEffect(() => {
         const loadData = async () => {
@@ -109,6 +120,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         if (!inviteEmail.includes("@") || inviting) return
         setInviting(true)
         setError(null)
+        setInviteAcceptUrl(null)
 
         try {
             const res = await fetch("/api/admin/invite", {
@@ -119,11 +131,15 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                     role: inviteRole,
                     organization_id: adminSession.organization_id,
                     invited_by_user_id: adminSession.user_id,
+                    base_url: typeof window !== "undefined" ? window.location.origin : undefined,
                 }),
             })
 
             const data = await res.json()
             if (!res.ok) throw new Error(data.error)
+
+            // Store the accept URL so admin can copy it manually
+            if (data.accept_url) setInviteAcceptUrl(data.accept_url)
 
             showSuccess(`Invite sent to ${inviteEmail}`)
             setInviteEmail("")
@@ -209,22 +225,21 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     // ── Audit action label ──────────────────────────────────────────────
     const actionLabel = (action: string) => {
         const map: Record<string, string> = {
+            add: "Added",
+            update: "Updated",
+            delete: "Deleted",
+            login: "Logged in",
             ADMIN_LOGIN: "Logged in",
             ADMIN_LOGOUT: "Logged out",
-            ADMIN_INVITE_SENT: "Invited admin",
-            ADMIN_INVITE_ACCEPTED: "Invite accepted",
-            ADMIN_REMOVED: "Removed admin",
-            ADMIN_ROLE_CHANGED: "Changed role",
-            SETTINGS_UPDATED: "Updated settings",
         }
         return map[action] || action.replaceAll("_", " ").toLowerCase()
     }
 
     const actionColor = (action: string) => {
-        if (action.includes("LOGIN")) return "text-success"
-        if (action.includes("INVITE")) return "text-primary"
-        if (action.includes("REMOVED")) return "text-destructive"
-        if (action.includes("ROLE")) return "text-warning"
+        if (action === "add") return "text-success"
+        if (action === "update") return "text-primary"
+        if (action === "delete") return "text-destructive"
+        if (action === "login") return "text-primary"
         return "text-muted-foreground"
     }
 
@@ -272,6 +287,32 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                 <div className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 px-4 py-3">
                     <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
                     <p className="text-sm text-success font-medium">{successMsg}</p>
+                </div>
+            )}
+
+            {/* Invite Accept URL — copyable link for manual sharing */}
+            {inviteAcceptUrl && (
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+                    <div className="flex items-start gap-2 mb-2">
+                        <ShieldCheck className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                        <div>
+                            <p className="text-sm font-semibold text-foreground">Invite Link</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Share this link with the invitee if the email doesn't reach them</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                        <input
+                            readOnly
+                            value={inviteAcceptUrl}
+                            className="flex-1 rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground font-mono truncate"
+                        />
+                        <button
+                            onClick={() => { navigator.clipboard.writeText(inviteAcceptUrl); setInviteAcceptUrl(null) }}
+                            className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+                        >
+                            Copy
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -548,31 +589,58 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                             <p className="text-sm">No audit logs yet</p>
                         </div>
                     ) : (
-                        <div className="divide-y divide-border/50">
-                            {auditLogs.map(log => (
-                                <div key={log.id} className="flex items-start gap-3 px-5 py-3.5">
-                                    <div className={cn(
-                                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted",
-                                    )}>
-                                        <Shield className={cn("h-4 w-4", actionColor(log.action_type))} />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm text-foreground">
-                                            <span className="font-semibold">{log.performed_by_email}</span>
-                                            {" "}
-                                            <span className="text-muted-foreground">{actionLabel(log.action_type)}</span>
-                                        </p>
-                                        {log.details && (
-                                            <p className="text-xs text-muted-foreground mt-0.5 truncate">{log.details}</p>
-                                        )}
-                                    </div>
-                                    <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
-                                        {new Date(log.timestamp).toLocaleString("en-IN", {
-                                            day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
-                                        })}
-                                    </span>
+                        <div className="flex flex-col gap-4">
+                            {/* Log Filters */}
+                            <div className="flex items-center gap-3 px-5 py-3 bg-muted/30 border-b border-border">
+                                <span className="text-xs font-bold text-muted-foreground uppercase">Filter Date:</span>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        type="date"
+                                        value={logStartDate}
+                                        onChange={(e) => setLogStartDate(e.target.value)}
+                                        className="h-8 text-xs rounded-lg w-32"
+                                    />
+                                    <span className="text-muted-foreground">to</span>
+                                    <Input
+                                        type="date"
+                                        value={logEndDate}
+                                        onChange={(e) => setLogEndDate(e.target.value)}
+                                        className="h-8 text-xs rounded-lg w-32"
+                                    />
+                                    {(logStartDate || logEndDate) && (
+                                        <button onClick={() => { setLogStartDate(""); setLogEndDate("") }} className="text-xs text-primary hover:underline ml-2">Clear</button>
+                                    )}
                                 </div>
-                            ))}
+                            </div>
+
+                            <div className="divide-y divide-border/50 px-5">
+                                {auditLogs.map(log => (
+                                    <div key={log.id} className="flex items-start gap-3 py-3.5 border-b last:border-0 border-border/50">
+                                        <div className={cn(
+                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted",
+                                        )}>
+                                            <Shield className={cn("h-4 w-4", actionColor(log.action))} />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm text-foreground">
+                                                <span className="font-semibold">{log.admin_email}</span>
+                                                {" "}
+                                                <span className={cn("font-medium", actionColor(log.action))}>{actionLabel(log.action)}</span>
+                                                {" "}
+                                                <span className="text-muted-foreground">{log.entity_type}</span>
+                                            </p>
+                                            {log.details && (
+                                                <p className="text-xs text-muted-foreground mt-0.5">{log.details}</p>
+                                            )}
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
+                                            {new Date(log.timestamp).toLocaleString("en-IN", {
+                                                day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
+                                            })}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>

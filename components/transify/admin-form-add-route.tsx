@@ -1,12 +1,14 @@
 "use client"
 
-import { useState } from "react"
-import { X, MapPin, Route, Bus, Plus, Trash2, Check, ChevronDown } from "lucide-react"
+import { useState, useEffect } from "react"
+import { X, MapPin, Route, Bus, Plus, Trash2, Check, ChevronDown, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { useJsApiLoader } from "@react-google-maps/api"
 
 interface AddRouteFormProps {
+    initialData?: any
     onClose: () => void
     onSave: (data: RouteData) => void
 }
@@ -17,16 +19,45 @@ export interface RouteData {
     endPoint: string
     stops: string[]
     vehicleId: string
+    distance_km?: string
 }
 
-const vehicleOptions = ["KA-01-AB-1234", "KA-05-CD-5678", "KA-09-EF-9012", "KA-12-GH-3456", "Unassigned"]
+// vehicleOptions is now fetched dynamically from Firestore
 
-export function AddRouteForm({ onClose, onSave }: AddRouteFormProps) {
+export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps) {
+    const { isLoaded } = useJsApiLoader({
+        id: "google-map-script",
+        googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+    })
+
     const [data, setData] = useState<RouteData>({
-        routeName: "", startPoint: "", endPoint: "", stops: [""], vehicleId: "",
+        routeName: initialData?.route_name || "",
+        startPoint: initialData?.start_point || "",
+        endPoint: initialData?.end_point || "",
+        stops: initialData?.stops || [""],
+        vehicleId: initialData?.vehicle_id || "",
+        distance_km: initialData?.distance_km || "0",
     })
     const [showVehicle, setShowVehicle] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [calculating, setCalculating] = useState(false)
+    const [vehicleOptions, setVehicleOptions] = useState<string[]>(["Unassigned"])
+
+    // Fetch real vehicles from Firestore
+    useEffect(() => {
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+        if (!orgId) return
+        fetch(`/api/vehicles/list?organization_id=${orgId}`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.vehicles) {
+                    const plates = d.vehicles.map((v: any) => v.plate_number || v.id)
+                    setVehicleOptions([...plates, "Unassigned"])
+                }
+            }).catch(() => { })
+    }, [])
 
     const isValid = data.routeName.trim() && data.startPoint.trim() && data.endPoint.trim()
 
@@ -38,10 +69,73 @@ export function AddRouteForm({ onClose, onSave }: AddRouteFormProps) {
         setData({ ...data, stops: updated })
     }
 
-    const handleSave = () => {
+    // ── Distance Calculation Logic ───────────────────────────────────────────
+    useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            if (isLoaded && data.startPoint && data.endPoint) {
+                calculateDistance()
+            }
+        }, 1000)
+        return () => clearTimeout(timeoutId)
+    }, [data.startPoint, data.endPoint, data.stops, isLoaded])
+
+    const calculateDistance = async () => {
+        if (!window.google) return
+        setCalculating(true)
+        try {
+            const service = new google.maps.DistanceMatrixService()
+            const allPoints = [data.startPoint, ...data.stops.filter(s => s.trim()), data.endPoint]
+
+            let totalDist = 0
+            // Calculate in segments
+            for (let i = 0; i < allPoints.length - 1; i++) {
+                const response = await service.getDistanceMatrix({
+                    origins: [allPoints[i]],
+                    destinations: [allPoints[i + 1]],
+                    travelMode: google.maps.TravelMode.DRIVING,
+                })
+                const element = response.rows[0].elements[0]
+                if (element.status === "OK") {
+                    totalDist += element.distance.value // in meters
+                }
+            }
+            const km = (totalDist / 1000).toFixed(1)
+            setData(prev => ({ ...prev, distance_km: km }))
+        } catch (e) {
+            console.error("Distance calc failed:", e)
+        } finally {
+            setCalculating(false)
+        }
+    }
+
+    const handleSave = async () => {
         if (!isValid) return
-        setSaved(true)
-        setTimeout(() => { onSave({ ...data, stops: data.stops.filter(s => s.trim()) }); onClose() }, 800)
+
+        const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+        const adminData = session ? JSON.parse(session) : null
+        const orgId = adminData?.organization_id
+
+        if (!orgId) { alert("Organization not found. Please log in again."); return }
+
+        try {
+            const endpoint = initialData ? "/api/routes/update" : "/api/routes/add"
+            const payload = initialData
+                ? { ...data, route_id: initialData.id, organization_id: orgId, stops: data.stops.filter(s => s.trim()), admin_id: adminData?.user_id, admin_email: adminData?.email }
+                : { ...data, stops: data.stops.filter(s => s.trim()), organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            })
+            const result = await res.json()
+            if (!res.ok) throw new Error(result.error)
+
+            setSaved(true)
+            setTimeout(() => { onSave(data); onClose() }, 800)
+        } catch (err: any) {
+            alert(err.message || `Failed to ${initialData ? "update" : "create"} route`)
+        }
     }
 
     return (
@@ -55,8 +149,8 @@ export function AddRouteForm({ onClose, onSave }: AddRouteFormProps) {
                                 <Route className="h-5 w-5 text-success" />
                             </div>
                             <div>
-                                <h2 className="text-base font-bold text-foreground">Add Route</h2>
-                                <p className="text-xs text-muted-foreground">Create a new route</p>
+                                <h2 className="text-base font-bold text-foreground">{initialData ? "Edit Route" : "Add Route"}</h2>
+                                <p className="text-xs text-muted-foreground">{initialData ? "Update route details" : "Create a new route"}</p>
                             </div>
                         </div>
                         <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
@@ -146,12 +240,34 @@ export function AddRouteForm({ onClose, onSave }: AddRouteFormProps) {
                         )}
                     </div>
 
+                    {/* Distance Display */}
+                    <div className="flex items-center justify-between rounded-xl bg-muted/50 p-4 border border-border/50">
+                        <div className="flex flex-col">
+                            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground/60">Calculated Distance</span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-2xl font-black text-foreground">{data.distance_km || "0"}</span>
+                                <span className="text-sm font-bold text-muted-foreground">km</span>
+                            </div>
+                        </div>
+                        {calculating ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                        ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                                <Route className="h-5 w-5 text-primary" />
+                            </div>
+                        )}
+                    </div>
+
                     <Button
                         onClick={handleSave}
-                        disabled={!isValid}
+                        disabled={!isValid || calculating}
                         className={cn("h-14 rounded-xl font-bold text-base mt-1 transition-all", saved ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground")}
                     >
-                        {saved ? <><Check className="mr-2 h-5 w-5" />Route Created!</> : "Save Route"}
+                        {saved ? (
+                            <><Check className="mr-2 h-5 w-5" />{initialData ? "Route Updated!" : "Route Created!"}</>
+                        ) : (
+                            initialData ? "Update Route" : "Save Route"
+                        )}
                     </Button>
                 </div>
             </div>

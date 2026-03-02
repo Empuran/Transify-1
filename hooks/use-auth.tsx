@@ -1,7 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState } from "react"
-import { auth, db, signInWithCustomToken } from "@/lib/firebase"
+import { auth, db, signInWithCustomToken, signInAnonymously } from "@/lib/firebase"
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import type { AdminRole } from "@/lib/rbac"
@@ -49,7 +49,7 @@ interface AuthContextType {
     activeOrgId: string | null
     adminSession: AdminSession | null
     setActiveOrg: (orgId: string) => void
-    loginMock: (role: UserRole, orgCategory?: OrgCategory) => void
+    loginMock: (role: UserRole, orgCategory?: OrgCategory, phone?: string) => void
     loginAdmin: (customToken: string, adminData: AdminSession) => Promise<void>
     logoutMock: () => void
 }
@@ -74,14 +74,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
     const [adminSession, setAdminSession] = useState<AdminSession | null>(null)
 
-    // Restore admin session from sessionStorage on mount
+    // Restore session from sessionStorage on mount
     useEffect(() => {
         if (typeof window !== "undefined") {
-            const stored = sessionStorage.getItem("transify_admin_session")
-            if (stored) {
+            const storedAdmin = sessionStorage.getItem("transify_admin_session")
+            if (storedAdmin) {
                 try {
-                    const parsed = JSON.parse(stored) as AdminSession
+                    const parsed = JSON.parse(storedAdmin) as AdminSession
                     setAdminSession(parsed)
+                    // ... (restored below in onAuthStateChanged)
+                } catch { }
+            }
+
+            const storedMock = sessionStorage.getItem("transify_mock_profile")
+            if (storedMock) {
+                try {
+                    const parsed = JSON.parse(storedMock) as UserProfile
+                    setProfile(parsed)
+                    setUser({ uid: "test_user_id", phoneNumber: parsed.phone } as FirebaseUser)
+                    setActiveOrgId(parsed.activeOrgId)
+                    setLoading(false)
                 } catch { }
             }
         }
@@ -118,11 +130,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }
 
-    const loginMock = (role: UserRole, orgCategory?: OrgCategory) => {
+    const loginMock = (role: UserRole, orgCategory?: OrgCategory, phone?: string) => {
         const mockProfile: UserProfile = {
             id: "test_user_id",
-            phone: "+919999999999",
-            globalName: "Test User",
+            phone: phone || "+919999999999",
+            globalName: role === "driver" ? "Loading Driver..." : "Test User",
             orgCategory: orgCategory || "school",
             roles: { "org_123": role },
             activeOrgId: "org_123",
@@ -138,9 +150,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }
             ]
         }
-        setUser({ uid: "test_user_id", phoneNumber: "+919999999999" } as FirebaseUser)
+        setUser({ uid: "test_user_id", phoneNumber: phone || "+919999999999" } as FirebaseUser)
         setProfile(mockProfile)
         setActiveOrgId("org_123")
+        setLoading(false)
+
+        if (typeof window !== "undefined") {
+            sessionStorage.setItem("transify_mock_profile", JSON.stringify(mockProfile))
+        }
+
+        // Also sign in to Firebase Auth anonymously so Firestore rules don't block writes
+        signInAnonymously(auth).catch(err => console.error("Anonymous auth failed:", err))
     }
 
     const logoutMock = () => {
@@ -150,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAdminSession(null)
         if (typeof window !== "undefined") {
             sessionStorage.removeItem("transify_admin_session")
+            sessionStorage.removeItem("transify_mock_profile")
         }
         auth.signOut().catch(() => { })
     }
@@ -164,6 +185,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+            // If we have a mock profile in sessionStorage, don't let null Firebase user overwrite it
+            const storedMock = typeof window !== "undefined" ? sessionStorage.getItem("transify_mock_profile") : null
+            if (!firebaseUser && storedMock) {
+                setLoading(false)
+                return
+            }
+
             setUser(firebaseUser)
 
             if (firebaseUser) {

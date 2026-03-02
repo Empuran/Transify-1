@@ -22,13 +22,14 @@ function LoginContent() {
 
     const assignedRole = roleMap[category] || "parent"
 
-    const handleLogin = (role: UserRole) => {
+    const handleLogin = (role: UserRole, phone: string) => {
         // Update auth state so layout allows access
-        loginMock(role === "parent" ? "guardian" : (role as any), category)
+        loginMock(role === "parent" ? "guardian" : (role as any), category, phone)
 
-        // Redirect to dashboard
+        // Redirect to dashboard with orgCode preserved
         const rolePath = role === "parent" ? "/parent" : `/${role}`
-        router.push(rolePath)
+        const finalPath = _orgCode ? `${rolePath}?orgCode=${_orgCode}` : rolePath
+        router.push(finalPath)
     }
 
     return <LoginScreen onLogin={handleLogin} assignedRole={assignedRole} orgCategory={category} />

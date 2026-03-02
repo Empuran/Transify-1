@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 export type UserRole = "admin" | "parent" | "driver"
 
 interface LoginScreenProps {
-  onLogin: (role: UserRole) => void
+  onLogin: (role: UserRole, phone: string) => void
   assignedRole?: UserRole
   orgCategory?: OrgCategory
 }
@@ -65,7 +65,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
     if (admin) {
       setStep("email")
     } else {
-      onLogin(assignedRole)
+      onLogin(assignedRole, phone)
     }
   }
 
@@ -75,7 +75,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
   }
 
   const handleVerifyEmailOtp = () => {
-    onLogin(assignedRole)
+    onLogin(assignedRole, phone)
   }
 
   return (
