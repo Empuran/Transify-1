@@ -6,7 +6,7 @@ import {
   Search, Download, Route, UserPlus, BarChart3, TrendingUp,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck,
+  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,7 +22,7 @@ import { AdminManagement } from "./admin-management"
 import { LiveMap } from "./live-map"
 import { useRouter } from "next/navigation"
 
-type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
+type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins" | "audit-log"
 type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -54,6 +54,98 @@ function StatusBadge({ status }: { status: string }) {
       )} />
       {status.replace(/-/g, " ")}
     </span>
+  )
+}
+
+// ── Audit Log Section (Super Admin only) ─────────────────────────────────────
+function AuditLogSection({ organizationId }: { organizationId?: string }) {
+  const [logs, setLogs] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState("")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
+
+  const fetchLogs = useCallback(async () => {
+    if (!organizationId) return
+    setLoading(true)
+    try {
+      let url = `/api/admin/audit-logs?organization_id=${organizationId}&limit=200`
+      if (startDate) url += `&start_date=${startDate}`
+      if (endDate) url += `&end_date=${endDate}`
+      const res = await fetch(url)
+      const data = await res.json()
+      setLogs(data.logs || [])
+    } catch { }
+    finally { setLoading(false) }
+  }, [organizationId, startDate, endDate])
+
+  useEffect(() => { fetchLogs() }, [fetchLogs])
+
+  const filtered = useMemo(() => logs.filter((l: any) =>
+    !search ||
+    (l.admin_email || "").toLowerCase().includes(search.toLowerCase()) ||
+    (l.action || "").toLowerCase().includes(search.toLowerCase()) ||
+    (l.details || "").toLowerCase().includes(search.toLowerCase())
+  ), [logs, search])
+
+  const typeBadge = (action: string = "") => {
+    const a = action.toLowerCase()
+    if (a.includes("login")) return <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">Login</span>
+    if (a.includes("delete") || a.includes("remov")) return <span className="rounded-md bg-destructive/10 px-2 py-0.5 text-[10px] font-bold text-destructive">Delete</span>
+    if (a.includes("add") || a.includes("creat")) return <span className="rounded-md bg-success/10 px-2 py-0.5 text-[10px] font-bold text-success">Add</span>
+    return <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[10px] font-bold text-warning">Edit</span>
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold text-foreground">Audit Log</h1>
+        <button onClick={fetchLogs}
+          className="flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted transition-colors">
+          Refresh
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-48 max-w-xs">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="Search by admin, action..." value={search} onChange={e => setSearch(e.target.value)}
+            className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
+        </div>
+        <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+          className="h-10 rounded-xl border border-border bg-card px-3 text-sm text-foreground" />
+        <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+          className="h-10 rounded-xl border border-border bg-card px-3 text-sm text-foreground" />
+        <span className="text-xs text-muted-foreground">{filtered.length} entries</span>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+        {loading && <div className="flex justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}
+        {!loading && filtered.length === 0 && (
+          <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+            <FileText className="h-8 w-8 opacity-30" />
+            <p className="text-sm">No audit entries found</p>
+          </div>
+        )}
+        {!loading && filtered.map((log: any, i: number) => (
+          <div key={log.id || i} className="flex items-start gap-4 border-b border-border/50 px-5 py-3.5 hover:bg-muted/30 transition-colors last:border-0">
+            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                {typeBadge(log.action)}
+                <span className="text-sm font-semibold text-foreground">{log.action || "Action"}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">{log.details || log.message || ""}</p>
+              <p className="text-[10px] text-muted-foreground/60 mt-1">
+                {log.admin_email || log.actor || "unknown"}
+                {log.timestamp ? " · " + new Date(log.timestamp).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" }) : ""}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -121,6 +213,7 @@ export function AdminDashboard() {
   const [notifications, setNotifications] = useState<any[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
 
+  const [dashboardDateEnd, setDashboardDateEnd] = useState<string>("")
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -300,6 +393,34 @@ export function AdminDashboard() {
     return unsubscribe
   }, [adminSession?.organization_id])
 
+  // ── Dashboard stats from notifications (real-time) ───────────────────────
+  const dashboardStats = useMemo(() => {
+    const start = dashboardDate ? new Date(dashboardDate + "T00:00:00").getTime() : 0
+    const end = dashboardDateEnd
+      ? new Date(dashboardDateEnd + "T23:59:59").getTime()
+      : dashboardDate ? new Date(dashboardDate + "T23:59:59").getTime() : Date.now()
+    const inRange = (n: any) => {
+      const t = new Date(n.timestamp || 0).getTime()
+      return t >= start && t <= end
+    }
+    const ranged = notifications.filter(inRange)
+    return {
+      delays: ranged.filter((n: any) => n.type === "delay"),
+      sos: ranged.filter((n: any) => n.type === "sos"),
+      tripStarts: ranged.filter((n: any) => n.type === "trip_start"),
+      tripEnds: ranged.filter((n: any) => n.type === "trip_end"),
+    }
+  }, [notifications, dashboardDate, dashboardDateEnd])
+
+  // Notifications visible in bell panel — hidden after user taps "Clear all"
+  const [panelClearedAt, setPanelClearedAt] = useState<number>(0)
+  const panelNotifications = useMemo(() =>
+    notifications.filter((n: any) => new Date(n.timestamp || 0).getTime() > panelClearedAt)
+    , [notifications, panelClearedAt])
+
+  // Selected tile for drilldown drawer
+  const [selectedTile, setSelectedTile] = useState<null | { title: string; items: any[]; type: string }>(null)
+
   // ── Tracking Filters ────────────────────────────────────────────────────
   const [trackStatus, setTrackStatus] = useState("all")
   const filteredTracking = useMemo(() => vehiclesData.filter((v: any) =>
@@ -328,6 +449,7 @@ export function AdminDashboard() {
       group: "System",
       items: [
         ...(isSuperAdmin ? [{ id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck }] : []),
+        ...(isSuperAdmin ? [{ id: "audit-log" as ActiveSection, label: "Audit Log", icon: FileText }] : []),
         ...(isSuperAdmin ? [{ id: "settings" as ActiveSection, label: "Settings", icon: Settings }] : []),
       ],
     },
@@ -414,9 +536,9 @@ export function AdminDashboard() {
                 className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background hover:bg-muted transition-colors"
               >
                 <Bell className="h-4 w-4 text-foreground" />
-                {notifications.filter(n => !n.read).length > 0 && (
+                {panelNotifications.filter((n: any) => !n.read).length > 0 && (
                   <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white">
-                    {notifications.filter(n => !n.read).length}
+                    {panelNotifications.length}
                   </span>
                 )}
               </button>
@@ -425,11 +547,16 @@ export function AdminDashboard() {
                 <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                   <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notifications</h3>
-                    <button className="text-[10px] font-bold text-primary hover:underline">Mark all as read</button>
+                    <button
+                      className="text-[10px] font-bold text-primary hover:underline"
+                      onClick={() => setPanelClearedAt(Date.now())}
+                    >Clear all</button>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
-                    {notifications.map((n) => (
-                      <div key={n.id} className={cn("border-b border-border/50 px-4 py-3 transition-colors hover:bg-secondary/50", !n.read && "bg-primary/5")}>
+                    {panelNotifications.map((n: any) => (
+                      <div key={n.id} className={cn("border-b border-border/50 px-4 py-3 transition-colors hover:bg-secondary/50",
+                        n.type === 'sos' ? 'bg-destructive/5' : n.type === 'delay' ? 'bg-warning/5' : ''
+                      )}>
                         <div className="flex items-start gap-3">
                           <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
                             n.type === 'sos' ? 'bg-destructive/10 text-destructive' :
@@ -448,10 +575,10 @@ export function AdminDashboard() {
                         </div>
                       </div>
                     ))}
-                    {notifications.length === 0 && (
+                    {panelNotifications.length === 0 && (
                       <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
                         <Bell className="h-8 w-8 opacity-20" />
-                        <p className="text-xs">No notifications yet</p>
+                        <p className="text-xs">All caught up!</p>
                       </div>
                     )}
                   </div>
@@ -470,52 +597,79 @@ export function AdminDashboard() {
           {/* OVERVIEW */}
           {section === "overview" && (
             <div className="flex flex-col gap-6">
-              <div className="flex items-center justify-between">
+              {/* Fleet Overview header + date range */}
+              <div className="flex flex-wrap items-center gap-3">
                 <div>
-                  <h1 className="text-2xl font-bold text-foreground">Good evening, {userName.split(" ")[0]} 👋</h1>
-                  <p className="text-sm text-muted-foreground mt-1">Here's your fleet overview for today.</p>
+                  <h1 className="text-2xl font-bold text-foreground">Fleet Overview 👋</h1>
+                  <p className="text-sm text-muted-foreground mt-1">Real-time fleet stats for the selected period.</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
-                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                    <input
-                      type="date"
-                      value={dashboardDate}
-                      onChange={(e) => setDashboardDate(e.target.value)}
-                      className="bg-transparent text-xs font-semibold text-foreground focus:outline-none"
-                    />
+                <div className="ml-auto flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs">
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-muted-foreground">From</span>
+                    <input type="date" value={dashboardDate} onChange={e => setDashboardDate(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-foreground focus:outline-none" />
                   </div>
-                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
-                    <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
-                    Live · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" })}
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">To</span>
+                    <input type="date" value={dashboardDateEnd} onChange={e => setDashboardDateEnd(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-foreground focus:outline-none" min={dashboardDate} />
+                  </div>
+                  {dashboardDateEnd && (
+                    <button onClick={() => setDashboardDateEnd("")}
+                      className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-lg hover:bg-muted transition-colors">Clear</button>
+                  )}
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-xs text-muted-foreground">
+                    <span className="h-2 w-2 rounded-full bg-success animate-pulse" />Live
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-                {[
-                  { label: "Total Vehicles", value: vehiclesData.length.toString(), sub: `${vehiclesData.length} in fleet`, icon: Bus, color: "text-primary", bg: "bg-primary/10", trend: "neutral" },
-                  { label: "Active Trips", value: vehiclesData.filter(v => v.status === "on-time").length.toString(), sub: `of ${vehiclesData.length} vehicles`, icon: Activity, color: "text-success", bg: "bg-success/10", trend: "up" },
-                  { label: "Delayed Trips", value: vehiclesData.filter(v => v.status === "delayed").length.toString(), sub: "real-time check", icon: Clock, color: "text-warning", bg: "bg-warning/10", trend: "down" },
-                  { label: "SOS Alerts", value: vehiclesData.filter(v => v.status === "emergency").length.toString(), sub: "0 active now", icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", trend: "neutral" },
-                ].map((card, i) => {
-                  const Icon = card.icon
-                  return (
-                    <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                      <div className="flex items-center justify-between">
-                        <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", card.bg)}>
-                          <Icon className={cn("h-5 w-5", card.color)} />
-                        </div>
-                        {card.trend === "up" && <ArrowUpRight className="h-4 w-4 text-success" />}
-                        {card.trend === "down" && <ArrowDownRight className="h-4 w-4 text-destructive" />}
-                      </div>
-                      <p className="mt-3 text-3xl font-black text-foreground">{card.value}</p>
-                      <p className="text-sm font-medium text-foreground">{card.label}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{card.sub}</p>
-                    </div>
-                  )
-                })}
-              </div>
+              {/* 6 Stat tiles — all clickable */}
+              {(() => {
+                const tripsNotStarted = vehiclesData.filter((v: any) => {
+                  const started = dashboardStats.tripStarts.some((n: any) => n.metadata?.vehicle_id === v.plate_number || n.metadata?.vehicle_id === v.id)
+                  return !started
+                })
+                const tiles = [
+                  { key: "vehicles", label: "Total Vehicles", value: vehiclesData.length, icon: Bus, color: "text-primary", bg: "bg-primary/10", border: "", items: vehiclesData, type: "vehicles" },
+                  { key: "starts", label: "Trips Started", value: dashboardStats.tripStarts.length, icon: Activity, color: "text-success", bg: "bg-success/10", border: "", items: dashboardStats.tripStarts, type: "trip_start" },
+                  { key: "ends", label: "Trips Ended", value: dashboardStats.tripEnds.length, icon: CheckCircle2, color: "text-primary", bg: "bg-primary/10", border: "", items: dashboardStats.tripEnds, type: "trip_end" },
+                  { key: "not_started", label: "Not Started", value: tripsNotStarted.length, icon: CircleDashed, color: "text-muted-foreground", bg: "bg-muted", border: "", items: tripsNotStarted, type: "not_started" },
+                  { key: "delays", label: "Delayed Trips", value: dashboardStats.delays.length, icon: Clock, color: "text-warning", bg: "bg-warning/10", border: dashboardStats.delays.length > 0 ? "border-warning/30 bg-warning/5" : "", items: dashboardStats.delays, type: "delay" },
+                  { key: "sos", label: "SOS Alerts", value: dashboardStats.sos.length, icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", border: dashboardStats.sos.length > 0 ? "border-destructive/30 bg-destructive/5" : "", items: dashboardStats.sos, type: "sos" },
+                ]
+                return (
+                  <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+                    {tiles.map((tile) => {
+                      const Icon = tile.icon
+                      return (
+                        <button key={tile.key} onClick={() => setSelectedTile({ title: tile.label, items: tile.items, type: tile.type })}
+                          className={cn(
+                            "rounded-2xl border border-border bg-card p-5 shadow-sm text-left transition-all hover:shadow-md hover:border-primary/20 active:scale-[0.98] cursor-pointer",
+                            tile.border
+                          )}>
+                          <div className="flex items-center justify-between">
+                            <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", tile.bg)}>
+                              <Icon className={cn("h-5 w-5", tile.color)} />
+                            </div>
+                            <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
+                          </div>
+                          <p className="mt-3 text-3xl font-black text-foreground">{tile.value}</p>
+                          <p className="text-sm font-medium text-foreground">{tile.label}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {tile.items.length > 0 && tile.type !== "vehicles" && tile.type !== "not_started"
+                              ? `Last: ${new Date((tile.items as any[])[0]?.timestamp || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                              : tile.type === "not_started" ? `${tile.value} vehicle(s) idle`
+                                : tile.type === "vehicles" ? `${tile.value} registered`
+                                  : "none today"}
+                          </p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
 
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
@@ -622,7 +776,12 @@ export function AdminDashboard() {
                     </div>
                   </div>
                   <div className="relative h-[400px] w-full bg-muted/20">
-                    <LiveMap organizationId={adminSession?.organization_id} />
+                    <LiveMap
+                      organizationId={adminSession?.organization_id}
+                      vehicleMeta={Object.fromEntries(
+                        vehiclesData.map((v: any) => [v.id, { type: v.type, plate_number: v.plate_number }])
+                      )}
+                    />
                   </div>
                 </div>
 
@@ -1032,6 +1191,11 @@ export function AdminDashboard() {
             <AdminManagement adminSession={adminSession} />
           )}
 
+          {/* AUDIT LOG (Super Admin only) */}
+          {section === "audit-log" && isSuperAdmin && (
+            <AuditLogSection organizationId={adminSession?.organization_id} />
+          )}
+
         </main>
       </div>
 
@@ -1065,6 +1229,74 @@ export function AdminDashboard() {
           <div className="flex items-center gap-2 rounded-xl bg-success px-5 py-3 shadow-xl">
             <CheckCircle2 className="h-4 w-4 text-success-foreground" />
             <span className="text-sm font-semibold text-success-foreground">{toastMsg}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Tile Drilldown Modal */}
+      {selectedTile && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-foreground/40 backdrop-blur-sm sm:items-center"
+          onClick={e => e.target === e.currentTarget && setSelectedTile(null)}>
+          <div className="w-full max-w-lg animate-in fade-in slide-in-from-bottom-4 duration-300 rounded-t-3xl sm:rounded-2xl bg-card shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
+              <div>
+                <h2 className="text-base font-bold text-foreground">{selectedTile.title}</h2>
+                <p className="text-xs text-muted-foreground">{selectedTile.items.length} record{selectedTile.items.length !== 1 ? 's' : ''}</p>
+              </div>
+              <button onClick={() => setSelectedTile(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-muted transition-colors">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-2">
+              {selectedTile.items.length === 0 && (
+                <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+                  <CheckCircle2 className="h-8 w-8 opacity-30" />
+                  <p className="text-sm">No records for this period</p>
+                </div>
+              )}
+              {selectedTile.items.map((item: any, i: number) => {
+                // Vehicle tile
+                if (selectedTile.type === "vehicles" || selectedTile.type === "not_started") return (
+                  <div key={item.id || i} className="rounded-xl border border-border bg-muted/30 px-4 py-3 flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+                      {(() => { const Icon = getVehicleIcon(item.type); return <Icon className="h-4 w-4 text-primary" /> })()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-foreground">{item.plate_number || item.id}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{item.type || "vehicle"} · {item.driver_name || item.driver || "No driver"}</p>
+                    </div>
+                    <span className={cn("text-[10px] font-bold capitalize px-2 py-1 rounded-full",
+                      item.status === "on-time" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                    )}>{item.status || "idle"}</span>
+                  </div>
+                )
+                // Notification-based tiles (delay, sos, trip_start, trip_end)
+                return (
+                  <div key={item.id || i} className={cn("rounded-xl border border-border px-4 py-3",
+                    item.type === 'sos' ? 'bg-destructive/5 border-destructive/20' :
+                      item.type === 'delay' ? 'bg-warning/5 border-warning/20' : 'bg-muted/30'
+                  )}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-bold text-foreground leading-tight">{item.title}</p>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{item.message}</p>
+                    {item.metadata && (
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                        {item.metadata.driver_name && <span className="text-[10px] font-medium text-foreground">👤 {item.metadata.driver_name}</span>}
+                        {item.metadata.driver_phone && <span className="text-[10px] text-muted-foreground">📞 {item.metadata.driver_phone}</span>}
+                        {item.metadata.vehicle_id && <span className="text-[10px] font-medium text-foreground">🚌 {item.metadata.vehicle_id}</span>}
+                        {item.metadata.reason && <span className="text-[10px] font-semibold text-warning">⚠️ {item.metadata.reason}</span>}
+                        {item.metadata.route_name && <span className="text-[10px] text-muted-foreground">🛣️ {item.metadata.route_name}</span>}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
       )}
