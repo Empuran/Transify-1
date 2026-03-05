@@ -62,18 +62,15 @@ export async function POST(req: NextRequest) {
             await batch.commit();
         }
 
-        // ── Audit Log ────────────────────────────────────────────────────────
-        if (admin_id && admin_email) {
-            await createAuditLog({
-                action: "update",
-                entity_type: "driver",
-                entity_id: driver_id,
-                admin_id,
-                admin_email,
-                organization_id,
-                details: `Updated driver ${name || oldData?.name}. Name Sync: ${name ? 'Yes' : 'No'}`
-            });
-        }
+        await createAuditLog({
+            action: "update",
+            entity_type: "driver",
+            entity_id: driver_id,
+            admin_id: admin_id || admin_email || "unknown",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Updated driver ${name || oldData?.name}. Name Sync: ${name ? 'Yes' : 'No'}`
+        });
 
         return NextResponse.json({ success: true, message: "Driver updated and synced" });
     } catch (error: any) {

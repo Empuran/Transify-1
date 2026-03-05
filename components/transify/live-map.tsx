@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { GoogleMap, useJsApiLoader, Marker, Polyline } from "@react-google-maps/api";
+import { GoogleMap, useJsApiLoader, Marker, Polyline, DirectionsRenderer } from "@react-google-maps/api";
 import { Loader2 } from "lucide-react";
 import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -99,17 +99,75 @@ interface LiveMapProps {
     vehicleMeta?: Record<string, { type?: string; plate_number?: string }>;
     /** Route stops to show as labelled markers */
     routeStops?: RouteStop[];
+    /** Whether to draw the route path connecting the stops */
+    showDirections?: boolean;
 }
 
-export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [] }: LiveMapProps) {
+const LIBRARIES: ("places")[] = ["places"];
+
+export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], showDirections = false }: LiveMapProps) {
     const { isLoaded, loadError } = useJsApiLoader({
         id: "google-map-script",
         googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+        libraries: LIBRARIES,
     });
 
     const [map, setMap] = useState<google.maps.Map | null>(null);
     const [vehicles, setVehicles] = useState<VehicleLocation[]>([]);
     const [historyByVehicle, setHistoryByVehicle] = useState<Record<string, HistoryPoint[]>>({});
+    const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+    const [directionsStops, setDirectionsStops] = useState<{ lat: number; lng: number }[]>([]);
+    const [geocodedStopsFallback, setGeocodedStopsFallback] = useState<({ lat: number; lng: number } | null)[]>([]);
+
+    // ── Fetch Route Directions if needed ────────────────────────────────────
+    useEffect(() => {
+        if (!isLoaded || !showDirections || routeStops.length < 2) {
+            setDirections(null);
+            setDirectionsStops([]);
+            setGeocodedStopsFallback([]);
+            return;
+        }
+
+        const validStops = routeStops.filter(s => s.name?.trim());
+        if (validStops.length < 2) return;
+
+        // 1. Independent Geocoding fallback: ensures we show markers even if polyline fails
+        const geocoder = new window.google.maps.Geocoder();
+        Promise.all(validStops.map(stop =>
+            new Promise<{ lat: number, lng: number } | null>((resolve) => {
+                geocoder.geocode({ address: stop.name, componentRestrictions: { country: "IN" } }, (results, status) => {
+                    if (status === "OK" && results?.[0]) resolve({ lat: results[0].geometry.location.lat(), lng: results[0].geometry.location.lng() });
+                    else resolve(null);
+                });
+            })
+        )).then(coords => setGeocodedStopsFallback(coords));
+
+        // 2. Directions API for Polyline
+        const origin = validStops[0].name;
+        const destination = validStops[validStops.length - 1].name;
+        const waypoints = validStops.slice(1, -1).map(s => ({ location: s.name, stopover: true }));
+
+        const service = new window.google.maps.DirectionsService();
+        service.route({
+            origin,
+            destination,
+            waypoints,
+            travelMode: window.google.maps.TravelMode.DRIVING,
+        }, (result, status) => {
+            if (status === "OK" && result) {
+                setDirections(result);
+                // Extract coordinates for our custom markers from directions legs
+                const legs = result.routes[0].legs;
+                const stopsCoords = [
+                    { lat: legs[0].start_location.lat(), lng: legs[0].start_location.lng() },
+                    ...legs.map(l => ({ lat: l.end_location.lat(), lng: l.end_location.lng() }))
+                ];
+                setDirectionsStops(stopsCoords);
+            } else {
+                console.error("Directions request failed:", status);
+            }
+        });
+    }, [isLoaded, showDirections, routeStops]);
 
     // ── Subscribe to live_locations ─────────────────────────────────────────
     useEffect(() => {
@@ -139,13 +197,15 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [] }: L
         return () => unsubscribe();
     }, [organizationId]);
 
-    // ── For each active vehicle, subscribe to route_history ─────────────────
+    // ── For each active vehicle, subscribe to route_history (current trip only) ──
     useEffect(() => {
         if (vehicles.length === 0) return;
         const unsubscribers: (() => void)[] = [];
+        // Only show route history from the last 12 hours (current trip window)
+        const tripCutoff = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
         vehicles.forEach((vehicle) => {
             const historyRef = collection(db, "live_locations", vehicle.id, "route_history");
-            const q = query(historyRef, orderBy("recorded_at", "asc"));
+            const q = query(historyRef, where("recorded_at", ">=", tripCutoff), orderBy("recorded_at", "asc"));
             const unsub = onSnapshot(q, (snapshot) => {
                 const points: HistoryPoint[] = [];
                 snapshot.forEach((doc) => {
@@ -195,8 +255,8 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [] }: L
         >
             {/* ── Vehicle markers ─────────────────────────────────────── */}
             {vehicles.map((v) => {
-                const meta = vehicleMeta[v.id] || {};
-                const vType = v.vehicle_type || meta.type || "bus";
+                const meta = vehicleMeta[v.id] || vehicleMeta[v.plate_number || ""] || Object.values(vehicleMeta).find(m => m.plate_number === v.plate_number) || {};
+                const vType = v.vehicle_type || meta.type || "car"; // default to car if unknown since car is most common in this app
                 const vStatus = v.status || "on-time";
                 const markerUrl = makeSvgMarkerUrl(vType, vStatus);
                 const label = meta.plate_number || v.plate_number || v.id.slice(0, 6);
@@ -246,33 +306,60 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [] }: L
                 );
             })}
 
+            {/* ── Route Directions Path ─────────────────────────────────────── */}
+            {directions && (
+                <DirectionsRenderer
+                    directions={directions}
+                    options={{
+                        suppressMarkers: true,
+                        polylineOptions: { strokeColor: "#8b5cf6", strokeOpacity: 0.8, strokeWeight: 6 },
+                    }}
+                />
+            )}
+
             {/* ── Route Stop markers (A, B, C…) ───────────────────────── */}
-            {routeStops.map((stop, i) => {
-                const pos = stop.position || (stop.lat && stop.lng ? { lat: stop.lat, lng: stop.lng } : null);
-                if (!pos) return null;
-                const letter = stop.label || STOP_LABELS[i] || String(i + 1);
-                return (
-                    <Marker
-                        key={`stop-${i}`}
-                        position={pos}
-                        icon={{
-                            path: google.maps.SymbolPath.CIRCLE,
-                            scale: 14,
-                            fillColor: "#6366f1",
-                            fillOpacity: 1,
-                            strokeColor: "#fff",
-                            strokeWeight: 2,
-                        }}
-                        label={{
-                            text: letter,
-                            color: "#fff",
-                            fontSize: "11px",
-                            fontWeight: "bold",
-                        }}
-                        title={stop.name}
-                    />
-                );
-            })}
+            {(showDirections && directionsStops.length > 0) ? (
+                directionsStops.map((stopCoords, i) => {
+                    const letter = STOP_LABELS[i] || String(i + 1);
+                    return (
+                        <Marker
+                            key={`stop-dir-${i}`}
+                            position={stopCoords}
+                            icon={{
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 14,
+                                fillColor: "#6366f1",
+                                fillOpacity: 1,
+                                strokeColor: "#fff",
+                                strokeWeight: 2,
+                            }}
+                            label={{ text: letter, color: "#fff", fontSize: "11px", fontWeight: "bold" }}
+                            title={routeStops[i]?.name || `Stop ${letter}`}
+                        />
+                    );
+                })
+            ) : (
+                geocodedStopsFallback.map((stopCoords, i) => {
+                    if (!stopCoords) return null;
+                    const letter = STOP_LABELS[i] || String(i + 1);
+                    return (
+                        <Marker
+                            key={`stop-geo-${i}`}
+                            position={stopCoords}
+                            icon={{
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 14,
+                                fillColor: "#8b5cf6",
+                                fillOpacity: 1,
+                                strokeColor: "#fff",
+                                strokeWeight: 2,
+                            }}
+                            label={{ text: letter, color: "#fff", fontSize: "11px", fontWeight: "bold" }}
+                            title={routeStops[i]?.name || `Stop ${letter}`}
+                        />
+                    );
+                })
+            )}
         </GoogleMap>
     );
 }

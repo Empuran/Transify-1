@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 
 // POST /api/students/add — register a new student/employee
 export async function POST(req: NextRequest) {
     try {
-        const { name, grade, memberId, parentPhone, route, organization, organization_id } = await req.json();
+        const { name, grade, memberId, parentPhone, route, organization, organization_id, admin_email, admin_name } = await req.json();
 
         if (!name || !memberId || !organization_id) {
             return NextResponse.json(
@@ -21,11 +22,22 @@ export async function POST(req: NextRequest) {
             route: route || "Unassigned",
             organization: organization || "",
             organization_id,
-            status: "at-home", // Default status
+            status: "active",
             created_at: new Date().toISOString(),
         };
 
         const docRef = await adminDb.collection("students").add(studentDoc);
+
+        await createAuditLog({
+            action: "add",
+            entity_type: "student",
+            entity_id: docRef.id,
+            admin_id: admin_email || "",
+            admin_name: admin_name || "",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Added student ${name.trim()} (${memberId.trim()})`,
+        });
 
         return NextResponse.json({
             success: true,

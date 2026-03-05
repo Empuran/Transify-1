@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 interface AddStudentFormProps {
+    initialData?: any
     onClose: () => void
     onSave: (data: StudentData) => void
     isCorporate?: boolean
@@ -24,12 +25,18 @@ export interface StudentData {
 const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
 const deptOptions = ["Engineering", "Design", "Marketing", "HR", "Finance", "Operations", "Legal", "Sales"]
 
-export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStudentFormProps) {
+export function AddStudentForm({ onClose, onSave, isCorporate = false, initialData }: AddStudentFormProps) {
     const [data, setData] = useState<StudentData>({
-        name: "", grade: "", memberId: "", parentPhone: "", route: "", organization: "",
+        name: initialData?.name || "",
+        grade: initialData?.grade || initialData?.dept || initialData?.department || "",
+        memberId: initialData?.memberId || initialData?.student_id || "",
+        parentPhone: initialData?.parentPhone || initialData?.parent_phone || "",
+        route: initialData?.route || initialData?.route_name || "",
+        organization: initialData?.organization || "",
     })
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
+    const [showSection, setShowSection] = useState(false)
     const [saved, setSaved] = useState(false)
     const [routeOptions, setRouteOptions] = useState<string[]>(["Unassigned"])
 
@@ -62,10 +69,17 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStud
         if (!orgId) { alert("Organization not found. Please log in again."); return }
 
         try {
-            const res = await fetch("/api/students/add", {
-                method: "POST",
+            const isEditing = !!initialData?.id
+            const endpoint = isEditing ? "/api/students/update" : "/api/students/add"
+            const method = isEditing ? "PUT" : "POST"
+            const payload = isEditing
+                ? { ...data, id: initialData.id, organization_id: orgId, admin_email: adminData?.email, admin_name: adminData?.name }
+                : { ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email, admin_name: adminData?.name }
+
+            const res = await fetch(endpoint, {
+                method,
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }),
+                body: JSON.stringify(payload),
             })
             const result = await res.json()
             if (!res.ok) throw new Error(result.error)
@@ -73,7 +87,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStud
             setSaved(true)
             setTimeout(() => { onSave(data); onClose() }, 800)
         } catch (err: any) {
-            alert(err.message || "Failed to add member")
+            alert(err.message || `Failed to ${initialData ? "update" : "add"} member`)
         }
     }
 
@@ -113,15 +127,31 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false }: AddStud
                     {/* Grade / Department Picker */}
                     <div className="flex flex-col gap-1.5">
                         <label className="text-sm font-semibold text-foreground">{isCorporate ? "Department" : "Class / Grade"}</label>
-                        <button onClick={() => setShowGrade(!showGrade)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
-                            <span className={cn("text-sm", data.grade ? "text-foreground" : "text-muted-foreground")}>{data.grade || (isCorporate ? "Select department" : "Select grade")}</span>
-                            <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showGrade && "rotate-180")} />
-                        </button>
+                        <div className={cn("grid gap-2", isCorporate ? "" : "grid-cols-2")}>
+                            <button onClick={() => setShowGrade(!showGrade)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                                <span className={cn("text-sm", data.grade ? "text-foreground" : "text-muted-foreground")}>{isCorporate ? (data.grade || "Select department") : (data.grade.split(" - ")[0] || "Select class")}</span>
+                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showGrade && "rotate-180")} />
+                            </button>
+                            {!isCorporate && (
+                                <button onClick={() => setShowSection(!showSection)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                                    <span className={cn("text-sm", data.grade.includes(" - ") ? "text-foreground" : "text-muted-foreground")}>{data.grade.includes(" - ") ? `Section ${data.grade.split(" - ")[1]}` : "Section"}</span>
+                                    <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showSection && "rotate-180")} />
+                                </button>
+                            )}
+                        </div>
                         {showGrade && (
                             <div className="mt-1 grid grid-cols-3 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {(isCorporate ? deptOptions : gradeOptions).map((g) => (
                                     <button key={g} onClick={() => { setData({ ...data, grade: g }); setShowGrade(false) }}
-                                        className={cn("rounded-lg py-2 text-xs font-medium transition-colors", data.grade === g ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{g}</button>
+                                        className={cn("rounded-lg py-2 text-xs font-medium transition-colors", (data.grade === g || data.grade.startsWith(g)) ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{g}</button>
+                                ))}
+                            </div>
+                        )}
+                        {!isCorporate && showSection && (
+                            <div className="mt-1 grid grid-cols-7 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
+                                {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((s) => (
+                                    <button key={s} onClick={() => { const base = data.grade.split(" - ")[0] || ""; setData({ ...data, grade: base ? `${base} - ${s}` : s }); setShowSection(false) }}
+                                        className={cn("rounded-lg py-2 text-xs font-bold transition-colors", data.grade.endsWith(` - ${s}`) ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{s}</button>
                                 ))}
                             </div>
                         )}

@@ -25,18 +25,15 @@ export async function POST(req: NextRequest) {
 
         const docRef = await adminDb.collection("vehicles").add(vehicleDoc);
 
-        // ── Audit Log ────────────────────────────────────────────────────────
-        if (admin_id && admin_email) {
-            await createAuditLog({
-                action: "add",
-                entity_type: "vehicle",
-                entity_id: docRef.id,
-                admin_id,
-                admin_email,
-                organization_id,
-                details: `Added new vehicle: ${vehicleDoc.plate_number} (${vehicleDoc.type})`
-            });
-        }
+        await createAuditLog({
+            action: "add",
+            entity_type: "vehicle",
+            entity_id: docRef.id,
+            admin_id: admin_id || admin_email || "unknown",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Added new vehicle: ${vehicleDoc.plate_number} (${vehicleDoc.type})`
+        });
 
         return NextResponse.json({ success: true, vehicle_id: docRef.id, message: `Vehicle ${plateNumber} registered` });
     } catch (error: any) {

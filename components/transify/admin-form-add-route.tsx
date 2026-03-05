@@ -1,11 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { X, MapPin, Route, Bus, Plus, Trash2, Check, ChevronDown, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useJsApiLoader } from "@react-google-maps/api"
+
+const LIBRARIES: ("places")[] = ["places"]
 
 interface AddRouteFormProps {
     initialData?: any
@@ -24,10 +26,41 @@ export interface RouteData {
 
 // vehicleOptions is now fetched dynamically from Firestore
 
+// ── PlacesInput: Input with Google Places Autocomplete ────────────────
+function PlacesInput({ value, onChange, placeholder, className, isLoaded }: { value: string; onChange: (v: string) => void; placeholder: string; className?: string; isLoaded: boolean }) {
+    const inputRef = useRef<HTMLInputElement>(null)
+    const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null)
+
+    useEffect(() => {
+        if (!isLoaded || !inputRef.current || autocompleteRef.current) return
+        const ac = new google.maps.places.Autocomplete(inputRef.current, {
+            types: ["geocode", "establishment"],
+            componentRestrictions: { country: "in" },
+        })
+        ac.addListener("place_changed", () => {
+            const place = ac.getPlace()
+            if (place?.formatted_address) onChange(place.formatted_address)
+            else if (place?.name) onChange(place.name)
+        })
+        autocompleteRef.current = ac
+    }, [isLoaded, onChange])
+
+    return (
+        <input
+            ref={inputRef}
+            placeholder={placeholder}
+            defaultValue={value}
+            onChange={(e) => onChange(e.target.value)}
+            className={cn("flex h-12 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
+        />
+    )
+}
+
 export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps) {
     const { isLoaded } = useJsApiLoader({
         id: "google-map-script",
         googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+        libraries: LIBRARIES,
     })
 
     const [data, setData] = useState<RouteData>({
@@ -61,12 +94,14 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
 
     const isValid = data.routeName.trim() && data.startPoint.trim() && data.endPoint.trim()
 
-    const addStop = () => setData({ ...data, stops: [...data.stops, ""] })
-    const removeStop = (i: number) => setData({ ...data, stops: data.stops.filter((_, idx) => idx !== i) })
+    const addStop = () => setData(prev => ({ ...prev, stops: [...prev.stops, ""] }))
+    const removeStop = (i: number) => setData(prev => ({ ...prev, stops: prev.stops.filter((_, idx) => idx !== i) }))
     const updateStop = (i: number, val: string) => {
-        const updated = [...data.stops]
-        updated[i] = val
-        setData({ ...data, stops: updated })
+        setData(prev => {
+            const updated = [...prev.stops]
+            updated[i] = val
+            return { ...prev, stops: updated }
+        })
     }
 
     // ── Distance Calculation Logic ───────────────────────────────────────────
@@ -83,24 +118,27 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
         if (!window.google) return
         setCalculating(true)
         try {
-            const service = new google.maps.DistanceMatrixService()
-            const allPoints = [data.startPoint, ...data.stops.filter(s => s.trim()), data.endPoint]
+            const validStops = data.stops.filter(s => s.trim())
+            const service = new window.google.maps.DirectionsService()
 
-            let totalDist = 0
-            // Calculate in segments
-            for (let i = 0; i < allPoints.length - 1; i++) {
-                const response = await service.getDistanceMatrix({
-                    origins: [allPoints[i]],
-                    destinations: [allPoints[i + 1]],
-                    travelMode: google.maps.TravelMode.DRIVING,
+            // Calculate the continuous driving route
+            const response = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
+                service.route({
+                    origin: data.startPoint,
+                    destination: data.endPoint,
+                    waypoints: validStops.map(s => ({ location: s, stopover: true })),
+                    travelMode: window.google.maps.TravelMode.DRIVING,
+                }, (result, status) => {
+                    if (status === "OK" && result) resolve(result)
+                    else reject(status)
                 })
-                const element = response.rows[0].elements[0]
-                if (element.status === "OK") {
-                    totalDist += element.distance.value // in meters
-                }
+            })
+
+            if (response && response.routes && response.routes[0]) {
+                const totalMeters = response.routes[0].legs.reduce((acc, leg) => acc + (leg.distance?.value || 0), 0)
+                const km = (totalMeters / 1000).toFixed(1)
+                setData(prev => ({ ...prev, distance_km: km }))
             }
-            const km = (totalDist / 1000).toFixed(1)
-            setData(prev => ({ ...prev, distance_km: km }))
         } catch (e) {
             console.error("Distance calc failed:", e)
         } finally {
@@ -165,7 +203,7 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                         <label className="text-sm font-semibold text-foreground">Route Name</label>
                         <div className="relative">
                             <Route className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                            <Input placeholder="e.g. Route A12" value={data.routeName} onChange={(e) => setData({ ...data, routeName: e.target.value })} className="h-12 rounded-xl bg-background pl-10" />
+                            <Input placeholder="e.g. Route A12" value={data.routeName} onChange={(e) => setData(prev => ({ ...prev, routeName: e.target.value }))} className="h-12 rounded-xl bg-background pl-10" />
                         </div>
                     </div>
 
@@ -174,15 +212,15 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">Start Point</label>
                             <div className="relative">
-                                <div className="absolute left-3.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-success" />
-                                <Input placeholder="Depot / Origin" value={data.startPoint} onChange={(e) => setData({ ...data, startPoint: e.target.value })} className="h-12 rounded-xl bg-background pl-9" />
+                                <div className="absolute left-3.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-success z-10" />
+                                <PlacesInput isLoaded={isLoaded} placeholder="Depot / Origin" value={data.startPoint} onChange={(v) => setData(prev => ({ ...prev, startPoint: v }))} className="pl-9" />
                             </div>
                         </div>
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">End Point</label>
                             <div className="relative">
-                                <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-destructive" />
-                                <Input placeholder="School / Office" value={data.endPoint} onChange={(e) => setData({ ...data, endPoint: e.target.value })} className="h-12 rounded-xl bg-background pl-9" />
+                                <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-destructive z-10" />
+                                <PlacesInput isLoaded={isLoaded} placeholder="School / Office" value={data.endPoint} onChange={(v) => setData(prev => ({ ...prev, endPoint: v }))} className="pl-9" />
                             </div>
                         </div>
                     </div>
@@ -201,11 +239,12 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                                     <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-primary/30 text-[10px] font-bold text-primary">
                                         {i + 1}
                                     </div>
-                                    <Input
+                                    <PlacesInput
+                                        isLoaded={isLoaded}
                                         placeholder={`Stop ${i + 1} name`}
                                         value={stop}
-                                        onChange={(e) => updateStop(i, e.target.value)}
-                                        className="h-10 flex-1 rounded-xl bg-background text-sm"
+                                        onChange={(v) => updateStop(i, v)}
+                                        className="flex-1"
                                     />
                                     {data.stops.length > 1 && (
                                         <button onClick={() => removeStop(i)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-destructive/10 transition-colors hover:bg-destructive/20">
@@ -230,7 +269,7 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                         {showVehicle && (
                             <div className="mt-1 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {vehicleOptions.map((v) => (
-                                    <button key={v} onClick={() => { setData({ ...data, vehicleId: v }); setShowVehicle(false) }}
+                                    <button key={v} onClick={() => { setData(prev => ({ ...prev, vehicleId: v })); setShowVehicle(false) }}
                                         className={cn("flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-left transition-colors", data.vehicleId === v ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
                                         {data.vehicleId === v && <Check className="h-3.5 w-3.5 shrink-0" />}
                                         {v}

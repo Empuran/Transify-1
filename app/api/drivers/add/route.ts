@@ -28,18 +28,15 @@ export async function POST(req: NextRequest) {
 
         const docRef = await adminDb.collection("drivers").add(driverDoc);
 
-        // ── Audit Log ────────────────────────────────────────────────────────
-        if (admin_id && admin_email) {
-            await createAuditLog({
-                action: "add",
-                entity_type: "driver",
-                entity_id: docRef.id,
-                admin_id,
-                admin_email,
-                organization_id,
-                details: `Added new driver: ${driverDoc.name}`
-            });
-        }
+        await createAuditLog({
+            action: "add",
+            entity_type: "driver",
+            entity_id: docRef.id,
+            admin_id: admin_id || admin_email || "unknown",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Added new driver: ${driverDoc.name}`
+        });
 
         return NextResponse.json({
             success: true,

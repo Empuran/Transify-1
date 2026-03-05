@@ -51,18 +51,15 @@ export async function POST(req: NextRequest) {
             await routeBatch.commit();
         }
 
-        // ── Audit Log ────────────────────────────────────────────────────────
-        if (admin_id && admin_email) {
-            await createAuditLog({
-                action: "update",
-                entity_type: "vehicle",
-                entity_id: vehicle_id,
-                admin_id,
-                admin_email,
-                organization_id,
-                details: `Updated vehicle ${plateNumber || oldData?.plate_number}.`
-            });
-        }
+        await createAuditLog({
+            action: "update",
+            entity_type: "vehicle",
+            entity_id: vehicle_id,
+            admin_id: admin_id || admin_email || "unknown",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Updated vehicle ${plateNumber || oldData?.plate_number}.`
+        });
 
         return NextResponse.json({ success: true, message: "Vehicle updated" });
     } catch (error: any) {

@@ -420,13 +420,22 @@ function DriverDashboardContent() {
       {/* ── Map View — Real Google Maps with live tracking ────────────── */}
       <div className="relative mx-4 mt-4 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
         <div className="h-64 w-full">
-          <LiveMap organizationId={resolvedOrgId} />
+          <LiveMap
+            organizationId={resolvedOrgId}
+            routeStops={dynamicStops}
+            showDirections={dynamicStops.length > 1}
+            vehicleMeta={selectedVehicle ? {
+              [selectedVehicle.id || selectedVehicle.plate_number]: {
+                type: vehicleType,
+                plate_number: selectedVehicle.plate_number
+              }
+            } : {}}
+          />
         </div>
         <div className="flex items-center justify-between px-4 py-2 border-t border-border/50 bg-card/50">
           <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Live Route Map</span>
           <div className="flex items-center gap-1.5">
             <VehicleMapIcon type={vehicleType} />
-            <span className="text-[10px] text-muted-foreground capitalize">{vehicleType}</span>
           </div>
         </div>
       </div>

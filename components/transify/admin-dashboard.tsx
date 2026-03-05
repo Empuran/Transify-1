@@ -205,6 +205,7 @@ export function AdminDashboard() {
   const [editingDriver, setEditingDriver] = useState<any>(null)
   const [editingVehicle, setEditingVehicle] = useState<any>(null)
   const [editingRoute, setEditingRoute] = useState<any>(null)
+  const [editingStudent, setEditingStudent] = useState<any>(null)
 
   // ── Date Filtering ──────────────────────────────────────────────────────
   const [dashboardDate, setDashboardDate] = useState<string>(new Date().toISOString().split("T")[0])
@@ -258,12 +259,20 @@ export function AdminDashboard() {
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchStudents])
 
-  const filteredMembers = useMemo(() => studentsData.filter(s =>
-    (s.name.toLowerCase().includes(memberSearch.toLowerCase()) || s.memberId.toLowerCase().includes(memberSearch.toLowerCase())) &&
-    (memberRouteFilter === "all" || s.route.includes(memberRouteFilter)) &&
-    (memberStatusFilter === "all" || s.status === memberStatusFilter) &&
-    (memberGradeFilter === "all" || (isCorporate ? s.dept === memberGradeFilter : s.grade === memberGradeFilter))
-  ), [memberSearch, memberRouteFilter, memberStatusFilter, memberGradeFilter, isCorporate])
+  const filteredMembers = useMemo(() => studentsData.filter(s => {
+    const name = (s.name || "").toLowerCase()
+    const memberId = (s.memberId || s.student_id || s.id || "").toLowerCase()
+    const route = s.route || s.route_name || ""
+    const status = s.status || "active"
+    const grade = isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")
+    const search = memberSearch.toLowerCase()
+    return (
+      (!search || name.includes(search) || memberId.includes(search)) &&
+      (memberRouteFilter === "all" || route.includes(memberRouteFilter)) &&
+      (memberStatusFilter === "all" || status === memberStatusFilter) &&
+      (memberGradeFilter === "all" || grade === memberGradeFilter)
+    )
+  }), [studentsData, memberSearch, memberRouteFilter, memberStatusFilter, memberGradeFilter, isCorporate])
 
   // ── Driver Filters ──────────────────────────────────────────────────────
   const [driverSearch, setDriverSearch] = useState("")
@@ -413,7 +422,18 @@ export function AdminDashboard() {
   }, [notifications, dashboardDate, dashboardDateEnd])
 
   // Notifications visible in bell panel — hidden after user taps "Clear all"
-  const [panelClearedAt, setPanelClearedAt] = useState<number>(0)
+  const [panelClearedAt, setPanelClearedAt] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("transify_panel_cleared_at")
+      return saved ? parseInt(saved, 10) : 0
+    }
+    return 0
+  })
+  const handleClearNotifications = () => {
+    const now = Date.now()
+    setPanelClearedAt(now)
+    if (typeof window !== "undefined") localStorage.setItem("transify_panel_cleared_at", now.toString())
+  }
   const panelNotifications = useMemo(() =>
     notifications.filter((n: any) => new Date(n.timestamp || 0).getTime() > panelClearedAt)
     , [notifications, panelClearedAt])
@@ -549,7 +569,7 @@ export function AdminDashboard() {
                     <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notifications</h3>
                     <button
                       className="text-[10px] font-bold text-primary hover:underline"
-                      onClick={() => setPanelClearedAt(Date.now())}
+                      onClick={() => handleClearNotifications()}
                     >Clear all</button>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
@@ -619,9 +639,7 @@ export function AdminDashboard() {
                     <button onClick={() => setDashboardDateEnd("")}
                       className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-lg hover:bg-muted transition-colors">Clear</button>
                   )}
-                  <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-xs text-muted-foreground">
-                    <span className="h-2 w-2 rounded-full bg-success animate-pulse" />Live
-                  </div>
+
                 </div>
               </div>
 
@@ -802,7 +820,7 @@ export function AdminDashboard() {
                           </div>
                           <div>
                             <p className="text-xs font-bold text-foreground">{v.plate_number || v.route || v.id}</p>
-                            <p className="text-[10px] text-muted-foreground">{v.driver || "No driver assigned"}</p>
+                            <p className="text-[10px] text-muted-foreground">{v.driver_name || "No driver assigned"}</p>
                           </div>
                         </div>
                         <StatusBadge status={v.status} />
@@ -843,14 +861,12 @@ export function AdminDashboard() {
                 </div>
                 <FilterDropdown
                   label={isCorporate ? "Department" : "Grade"}
-                  options={isCorporate
-                    ? ["Engineering", "Design", "Marketing", "HR", "Finance"]
-                    : ["Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9"]}
+                  options={[...new Set(studentsData.map(s => isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")).filter(Boolean))]}
                   value={memberGradeFilter}
                   onChange={setMemberGradeFilter}
                 />
-                <FilterDropdown label="Route" options={["Route A12", "Route B5", "Route C3", "Route D7"]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
-                <FilterDropdown label="Status" options={["on-bus", "at-home", "at-school"]} value={memberStatusFilter} onChange={setMemberStatusFilter} />
+                <FilterDropdown label="Route" options={[...new Set(studentsData.map(s => s.route || s.route_name || "").filter(Boolean))]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
+                <FilterDropdown label="Status" options={[...new Set(studentsData.map(s => s.status || "active").filter(Boolean))]} value={memberStatusFilter} onChange={setMemberStatusFilter} />
                 {(memberGradeFilter !== "all" || memberRouteFilter !== "all" || memberStatusFilter !== "all" || memberSearch) && (
                   <button onClick={() => { setMemberGradeFilter("all"); setMemberRouteFilter("all"); setMemberStatusFilter("all"); setMemberSearch("") }}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
@@ -871,20 +887,49 @@ export function AdminDashboard() {
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">ID</th>
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Route</th>
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Status</th>
+                      <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-muted-foreground">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredMembers.map((s, i) => (
-                      <tr key={i} className="border-b border-border/50 hover:bg-secondary/50 transition-colors">
-                        <td className="px-5 py-3 font-semibold text-foreground">{s.name}</td>
-                        <td className="px-5 py-3 text-muted-foreground">{isCorporate ? s.dept : s.grade}</td>
-                        <td className="px-5 py-3 font-mono text-xs text-muted-foreground">{s.memberId}</td>
-                        <td className="px-5 py-3 text-muted-foreground">{s.route}</td>
-                        <td className="px-5 py-3"><StatusBadge status={s.status} /></td>
+                      <tr key={s.id || i} className="border-b border-border/50 hover:bg-secondary/50 transition-colors">
+                        <td className="px-5 py-3 font-semibold text-foreground">{s.name || "—"}</td>
+                        <td className="px-5 py-3 text-muted-foreground">{isCorporate ? (s.dept || s.department || "—") : (s.grade || s.class || "—")}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-muted-foreground">{s.memberId || s.student_id || s.id || "—"}</td>
+                        <td className="px-5 py-3 text-muted-foreground">{s.route || s.route_name || "—"}</td>
+                        <td className="px-5 py-3"><StatusBadge status={s.status || "active"} /></td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => { setEditingStudent(s); setActiveForm("student") }}
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button onClick={async () => {
+                              if (!confirm(`Delete ${s.name || 'this student'}? This cannot be undone.`)) return
+                              try {
+                                const res = await fetch('/api/students/delete', {
+                                  method: 'DELETE',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    id: s.id,
+                                    organization_id: adminSession?.organization_id,
+                                    admin_email: userEmail,
+                                    admin_name: userName,
+                                  })
+                                })
+                                if (!res.ok) throw new Error((await res.json()).error)
+                                showToast(`${s.name || 'Student'} deleted`)
+                              } catch (err: any) { alert(err.message || 'Delete failed') }
+                            }}
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                     {filteredMembers.length === 0 && (
-                      <tr><td colSpan={5} className="px-5 py-12 text-center text-sm text-muted-foreground">No {memberLabel.toLowerCase()} match the current filters.</td></tr>
+                      <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-muted-foreground">No {memberLabel.toLowerCase()} match the current filters.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -927,7 +972,7 @@ export function AdminDashboard() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-bold text-foreground truncate">{d.name}</p>
-                        <StatusBadge status={d.status} />
+                        <p className="text-xs text-muted-foreground truncate">{d.phone || "—"}</p>
                       </div>
                     </div>
                     <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
@@ -1200,7 +1245,7 @@ export function AdminDashboard() {
       </div>
 
       {/* Forms */}
-      {activeForm === "student" && <AddStudentForm isCorporate={isCorporate} onClose={() => setActiveForm(null)} onSave={() => showToast(`${memberLabel.slice(0, -1)} added successfully`)} />}
+      {(activeForm === "student" || editingStudent) && <AddStudentForm initialData={editingStudent} isCorporate={isCorporate} onClose={() => { setActiveForm(null); setEditingStudent(null) }} onSave={() => { showToast(editingStudent ? `${memberLabel.slice(0, -1)} updated` : `${memberLabel.slice(0, -1)} added successfully`) }} />}
       {(activeForm === "driver" || editingDriver) && (
         <AddDriverForm
           initialData={editingDriver}

@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { CheckCircle2, Clock, AlertTriangle, CircleDashed, CirclePlay } from "lucide-react"
 
-type StatusType = "on-time" | "delayed" | "emergency" | "completed" | "upcoming" | "active"
+type StatusType = "on-time" | "delayed" | "emergency" | "completed" | "upcoming" | "active" | "on-boarded"
 
 interface StatusBadgeProps {
   status: StatusType
@@ -51,6 +51,12 @@ const statusConfig: Record<StatusType, {
     label: "Active",
     className: "bg-success/15 text-success",
     icon: CirclePlay,
+    dotClass: "bg-success",
+  },
+  "on-boarded": {
+    label: "On Boarded",
+    className: "bg-success/15 text-success",
+    icon: CheckCircle2,
     dotClass: "bg-success",
   },
 }
