@@ -101,11 +101,13 @@ interface LiveMapProps {
     routeStops?: RouteStop[];
     /** Whether to draw the route path connecting the stops */
     showDirections?: boolean;
+    /** Whether to only show vehicles present in vehicleMeta keys */
+    filterToMeta?: boolean;
 }
 
 const LIBRARIES: ("places")[] = ["places"];
 
-export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], showDirections = false }: LiveMapProps) {
+export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], showDirections = false, filterToMeta = false }: LiveMapProps) {
     const { isLoaded, loadError } = useJsApiLoader({
         id: "google-map-script",
         googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
@@ -254,7 +256,10 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
             options={{ disableDefaultUI: true, zoomControl: true, mapTypeControl: false, fullscreenControl: true }}
         >
             {/* ── Vehicle markers ─────────────────────────────────────── */}
-            {vehicles.map((v) => {
+            {vehicles.filter(v => {
+                if (!filterToMeta) return true;
+                return vehicleMeta[v.id] || vehicleMeta[v.plate_number || ""] || Object.values(vehicleMeta).find(m => m.plate_number === v.plate_number);
+            }).map((v) => {
                 const meta = vehicleMeta[v.id] || vehicleMeta[v.plate_number || ""] || Object.values(vehicleMeta).find(m => m.plate_number === v.plate_number) || {};
                 const vType = v.vehicle_type || meta.type || "car"; // default to car if unknown since car is most common in this app
                 const vStatus = v.status || "on-time";

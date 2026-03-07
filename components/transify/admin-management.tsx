@@ -30,6 +30,7 @@ interface AuditLogData {
     action: string
     entity_type: string
     entity_id: string
+    admin_name?: string
     admin_email: string
     details: string
     timestamp: string
@@ -64,9 +65,11 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     // Tab
     const [activeTab, setActiveTab] = useState<"admins" | "audit">("admins")
 
-    // Log Filtering
+    // Log Filtering & Pagination
     const [logStartDate, setLogStartDate] = useState("")
     const [logEndDate, setLogEndDate] = useState("")
+    const [currentLogPage, setCurrentLogPage] = useState(1)
+    const logsPerPage = 10
 
     const isSuperAdmin = adminSession.role === "SUPER_ADMIN"
 
@@ -210,11 +213,12 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         }
     }
 
-    // ── Filtered Admins ─────────────────────────────────────────────────
     const filteredAdmins = admins.filter(a => {
         if (a.status === "DISABLED") return false
-        const matchesSearch = a.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            a.name.toLowerCase().includes(searchQuery.toLowerCase())
+        const email = a.email || ""
+        const name = a.name || ""
+        const query = searchQuery.toLowerCase()
+        const matchesSearch = email.toLowerCase().includes(query) || name.toLowerCase().includes(query)
         const matchesRole = roleFilter === "all" || a.role === roleFilter
         return matchesSearch && matchesRole
     })
@@ -232,7 +236,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
             ADMIN_LOGIN: "Logged in",
             ADMIN_LOGOUT: "Logged out",
         }
-        return map[action] || action.replaceAll("_", " ").toLowerCase()
+        return map[action] || (action ? action.replaceAll("_", " ").toLowerCase() : "unknown action")
     }
 
     const actionColor = (action: string) => {
@@ -391,8 +395,8 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                 </div>
             )}
 
-            {/* Tabs */}
-            <div className="flex gap-1 rounded-xl bg-muted p-1">
+            {/* Tabs (Mobile Only) */}
+            <div className="flex gap-1 rounded-xl bg-muted p-1 lg:hidden">
                 {[
                     { id: "admins" as const, label: "Team Members", icon: Users },
                     { id: "audit" as const, label: "Audit Log", icon: Shield },
@@ -416,9 +420,13 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                 })}
             </div>
 
-            {/* Admins List Tab */}
-            {activeTab === "admins" && (
-                <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Admins List Section */}
+                <div className={cn("flex flex-col gap-6", activeTab !== "admins" && "hidden lg:flex")}>
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Team Members</h2>
+                    </div>
+
                     {/* Search + Filter */}
                     <div className="flex flex-wrap items-center gap-3">
                         <div className="relative flex-1 min-w-48 max-w-xs">
@@ -475,7 +483,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                                             "text-xs font-bold",
                                             admin.role === "SUPER_ADMIN" ? "text-warning" : "text-primary"
                                         )}>
-                                            {admin.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)}
+                                            {(admin.name || "??").split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)}
                                         </span>
                                     </div>
 
@@ -577,12 +585,15 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                             </div>
                         )}
                     </div>
-                </>
-            )}
+                    </div>
+                </div>
 
-            {/* Audit Log Tab */}
-            {activeTab === "audit" && (
-                <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+                {/* Audit Log Section */}
+                <div className={cn("flex flex-col gap-6", activeTab !== "audit" && "hidden lg:flex")}>
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Audit Log</h2>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden min-h-[400px]">
                     {auditLogs.length === 0 ? (
                         <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                             <Shield className="h-8 w-8 opacity-40" />
@@ -614,37 +625,98 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                             </div>
 
                             <div className="divide-y divide-border/50 px-5">
-                                {auditLogs.map(log => (
-                                    <div key={log.id} className="flex items-start gap-3 py-3.5 border-b last:border-0 border-border/50">
-                                        <div className={cn(
-                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted",
-                                        )}>
-                                            <Shield className={cn("h-4 w-4", actionColor(log.action))} />
+                                {(() => {
+                                    const indexOfLastLog = currentLogPage * logsPerPage;
+                                    const indexOfFirstLog = indexOfLastLog - logsPerPage;
+                                    const currentLogs = auditLogs.slice(indexOfFirstLog, indexOfLastLog);
+                                    
+                                    return currentLogs.map(log => (
+                                        <div key={log.id} className="flex items-start gap-3 py-3.5 border-b last:border-0 border-border/50">
+                                            <div className={cn(
+                                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted",
+                                            )}>
+                                                <Shield className={cn("h-4 w-4", actionColor(log.action))} />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm text-foreground">
+                                                    <span className="font-semibold text-primary">{log.admin_name || log.admin_email}</span>
+                                                    {" "}
+                                                    <span className={cn("font-medium", actionColor(log.action))}>{actionLabel(log.action)}</span>
+                                                    {" "}
+                                                    <span className="text-muted-foreground">{log.entity_type}</span>
+                                                </p>
+                                                {log.details && (
+                                                    <p className="text-xs text-muted-foreground mt-0.5">{log.details}</p>
+                                                )}
+                                            </div>
+                                            <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
+                                                {new Date(log.timestamp).toLocaleString("en-IN", {
+                                                    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
+                                                })}
+                                            </span>
                                         </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm text-foreground">
-                                                <span className="font-semibold">{log.admin_email}</span>
-                                                {" "}
-                                                <span className={cn("font-medium", actionColor(log.action))}>{actionLabel(log.action)}</span>
-                                                {" "}
-                                                <span className="text-muted-foreground">{log.entity_type}</span>
-                                            </p>
-                                            {log.details && (
-                                                <p className="text-xs text-muted-foreground mt-0.5">{log.details}</p>
-                                            )}
-                                        </div>
-                                        <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
-                                            {new Date(log.timestamp).toLocaleString("en-IN", {
-                                                day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
-                                            })}
-                                        </span>
-                                    </div>
-                                ))}
+                                    ));
+                                })()}
                             </div>
+
+                            {/* Pagination Controls */}
+                            {auditLogs.length > logsPerPage && (
+                                <div className="flex items-center justify-between px-5 py-4 bg-muted/20 border-t border-border mt-auto">
+                                    <p className="text-xs text-muted-foreground">
+                                        Showing {Math.min(auditLogs.length, (currentLogPage - 1) * logsPerPage + 1)} to {Math.min(auditLogs.length, currentLogPage * logsPerPage)} of {auditLogs.length} logs
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentLogPage(prev => Math.max(1, prev - 1))}
+                                            disabled={currentLogPage === 1}
+                                            className="h-8 rounded-lg px-3 text-xs"
+                                        >
+                                            Previous
+                                        </Button>
+                                        <div className="flex items-center gap-1">
+                                            {Array.from({ length: Math.ceil(auditLogs.length / logsPerPage) }).map((_, i) => {
+                                                const page = i + 1;
+                                                // Only show current, first, last, and pages around current
+                                                if (page === 1 || page === Math.ceil(auditLogs.length / logsPerPage) || (page >= currentLogPage - 1 && page <= currentLogPage + 1)) {
+                                                    return (
+                                                        <button
+                                                            key={page}
+                                                            onClick={() => setCurrentLogPage(page)}
+                                                            className={cn(
+                                                                "h-8 w-8 rounded-lg text-xs font-medium transition-all",
+                                                                currentLogPage === page
+                                                                    ? "bg-primary text-primary-foreground shadow-sm"
+                                                                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                                                            )}
+                                                        >
+                                                            {page}
+                                                        </button>
+                                                    );
+                                                }
+                                                if (page === currentLogPage - 2 || page === currentLogPage + 2) {
+                                                    return <span key={page} className="text-muted-foreground">...</span>;
+                                                }
+                                                return null;
+                                            })}
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentLogPage(prev => Math.min(Math.ceil(auditLogs.length / logsPerPage), prev + 1))}
+                                            disabled={currentLogPage === Math.ceil(auditLogs.length / logsPerPage)}
+                                            className="h-8 rounded-lg px-3 text-xs"
+                                        >
+                                            Next
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
-            )}
+            </div>
         </div>
     )
 }

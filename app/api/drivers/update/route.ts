@@ -62,6 +62,10 @@ export async function POST(req: NextRequest) {
             await batch.commit();
         }
 
+        const changedFields = Object.keys(updateData)
+            .filter(k => k !== 'updated_at')
+            .filter(k => JSON.stringify(updateData[k]) !== JSON.stringify(oldData?.[k]));
+
         await createAuditLog({
             action: "update",
             entity_type: "driver",
@@ -69,7 +73,7 @@ export async function POST(req: NextRequest) {
             admin_id: admin_id || admin_email || "unknown",
             admin_email: admin_email || "",
             organization_id,
-            details: `Updated driver ${name || oldData?.name}. Name Sync: ${name ? 'Yes' : 'No'}`
+            details: `Updated driver ${name || oldData?.name}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`
         });
 
         return NextResponse.json({ success: true, message: "Driver updated and synced" });

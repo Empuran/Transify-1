@@ -7,12 +7,22 @@ const globalForFirebase = globalThis as unknown as {
     _firebaseAdminApp?: App;
 };
 
+const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+console.log("[Firebase Admin] Module loading. Env check:", {
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    email: process.env.FIREBASE_CLIENT_EMAIL,
+    keyExists: !!privateKey,
+    keyLength: privateKey?.length,
+    keyStart: privateKey?.substring(0, 30),
+    keyEnd: privateKey?.substring((privateKey?.length || 0) - 30)
+});
+
 function getAdminApp(): App {
     if (globalForFirebase._firebaseAdminApp) {
         return globalForFirebase._firebaseAdminApp;
     }
 
-    // Clean up any existing apps to avoid conflicts during hot-reload
     if (getApps().length > 0) {
         return getApps()[0];
     }
@@ -20,7 +30,7 @@ function getAdminApp(): App {
     const serviceAccount: ServiceAccount = {
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+        privateKey,
     };
 
     const app = initializeApp({ credential: cert(serviceAccount) });

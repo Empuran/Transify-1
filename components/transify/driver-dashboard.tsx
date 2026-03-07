@@ -119,12 +119,14 @@ function DriverDashboardContent() {
   useEffect(() => { resolveOrg() }, [resolveOrg])
 
   const [tripState, setTripState] = useState<TripState>("not-started")
+  const [tripDirection, setTripDirection] = useState<"to-school" | "from-school">("to-school")
   const [showDelayReport, setShowDelayReport] = useState(false)
   const [showSosConfirm, setShowSosConfirm] = useState(false)
   const [vehicles, setVehicles] = useState<any[]>([])
   const [selectedVehicle, setSelectedVehicle] = useState<any>(null)
   const [showVehiclePicker, setShowVehiclePicker] = useState(false)
   const [realName, setRealName] = useState("")
+  const [driverId, setDriverId] = useState("")
   const [driverPhone, setDriverPhone] = useState("")
   const [isVerifying, setIsVerifying] = useState(true)
   const [currentRoute, setCurrentRoute] = useState<any>(null)
@@ -148,11 +150,16 @@ function DriverDashboardContent() {
         const currentDriver = data.drivers.find((d: any) => normalize(d.phone) === userPhoneDigits || d.phone === profile.phone)
         if (currentDriver) {
           setRealName(currentDriver.name)
+          setDriverId(currentDriver.id)
           setDriverPhone(currentDriver.phone || profile.phone || "")
           const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
           if (targetVehId && targetVehId !== "Unassigned" && vehicles.length > 0) {
             const assignedVeh = vehicles.find((v: any) => v.id === targetVehId || v.plate_number === targetVehId || normalize(v.plate_number) === normalize(targetVehId))
-            if (assignedVeh && (!selectedVehicle || selectedVehicle.id !== assignedVeh.id)) setSelectedVehicle(assignedVeh)
+            if (assignedVeh) {
+              setSelectedVehicle(assignedVeh)
+              // Close picker if it was somehow open
+              setShowVehiclePicker(false)
+            }
           }
         }
       }
@@ -183,16 +190,21 @@ function DriverDashboardContent() {
       if (routeDoc) {
         const route = routeDoc.data()
         setCurrentRoute({ id: routeDoc.id, ...route })
-        const mappedStops = [
+        const baseStops = [
           { name: route.start_point, lat: null, lng: null },
           ...(route.stops || []).map((s: string) => ({ name: s, lat: null, lng: null })),
           { name: route.end_point, lat: null, lng: null }
         ]
-        setDynamicStops(mappedStops)
+        // If from-school, reverse the entire sequence
+        if (tripDirection === "from-school") {
+          setDynamicStops([...baseStops].reverse())
+        } else {
+          setDynamicStops(baseStops)
+        }
       }
     }, (err) => console.error("Route listener error:", err))
     return () => unsubscribe()
-  }, [resolvedOrgId, selectedVehicle?.id, selectedVehicle?.plate_number])
+  }, [resolvedOrgId, selectedVehicle?.id, selectedVehicle?.plate_number, tripDirection])
 
   useEffect(() => { if (resolvedOrgId) fetchVehicles() }, [resolvedOrgId, fetchVehicles])
   useEffect(() => { if (vehicles.length > 0 || (resolvedOrgId && profile?.phone)) fetchDriverInfo() }, [vehicles.length, fetchDriverInfo, resolvedOrgId, profile?.phone])
@@ -241,18 +253,32 @@ function DriverDashboardContent() {
     )
   }, [])
 
-  const handleStartTrip = () => {
+  const handleStartTrip = async () => {
     if (!selectedVehicle) { alert("Please select a vehicle before starting the trip."); setShowVehiclePicker(true); return }
     setTripState("in-progress")
     setCurrentStopIndex(0)
     setIsAtStop(true)
     lastAutoStopRef.current = -1
+    
+    // Update driver status in Firestore
+    if (driverId) {
+      const { doc, setDoc } = await import("firebase/firestore")
+      setDoc(doc(db, "drivers", driverId), { status: "on-duty" }, { merge: true }).catch(console.error)
+    }
+
     notifyAdmin("trip_start", "🚌 Trip Started",
-      `Vehicle ${selectedVehicle?.plate_number} started the trip on route ${currentRoute?.route_name || "—"}.`)
+      `Vehicle ${selectedVehicle?.plate_number} started the trip on route ${currentRoute?.route_name || "—"} (${tripDirection === 'to-school' ? 'To School' : 'From School'}).`)
   }
 
-  const handleEndTrip = () => {
+  const handleEndTrip = async () => {
     setTripState("completed")
+    
+    // Update driver status in Firestore
+    if (driverId) {
+      const { doc, setDoc } = await import("firebase/firestore")
+      setDoc(doc(db, "drivers", driverId), { status: "off-duty" }, { merge: true }).catch(console.error)
+    }
+
     notifyAdmin("trip_end", "🏁 Trip Ended",
       `Vehicle ${selectedVehicle?.plate_number} completed the trip on route ${currentRoute?.route_name || "—"}.`)
   }
@@ -308,42 +334,50 @@ function DriverDashboardContent() {
         </div>
 
         {/* Vehicle & Route */}
-        <div className="mt-4 flex gap-3">
-          <button
-            onClick={() => setShowVehiclePicker(!showVehiclePicker)}
-            className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5 text-left transition-colors active:bg-primary-foreground/20"
-          >
-            <Bus className="h-4 w-4 text-primary-foreground/80" />
-            <div className="flex flex-1 flex-col overflow-hidden">
-              <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Vehicle</span>
-              <span className="text-xs font-semibold text-primary-foreground truncate">{selectedVehicle?.plate_number || "Select Vehicle"}</span>
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="flex gap-3">
+            <div
+              className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5 text-left transition-colors"
+            >
+              <Bus className="h-4 w-4 text-primary-foreground/80" />
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Vehicle</span>
+                <span className="text-xs font-semibold text-primary-foreground truncate">{selectedVehicle?.plate_number || "No Assigned Vehicle"}</span>
+              </div>
             </div>
-            <ChevronDown className={cn("h-4 w-4 text-primary-foreground/40 transition-transform", showVehiclePicker && "rotate-180")} />
-          </button>
-          <div className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5">
-            <Route className="h-4 w-4 text-primary-foreground/80" />
-            <div className="flex flex-col">
-              <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Route</span>
-              <span className="text-xs font-semibold text-primary-foreground">{currentRoute?.route_name || "No route"}</span>
+            <div className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5">
+              <Route className="h-4 w-4 text-primary-foreground/80" />
+              <div className="flex flex-col">
+                <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Route</span>
+                <span className="text-xs font-semibold text-primary-foreground">{currentRoute?.route_name || "No route"}</span>
+              </div>
             </div>
+          </div>
+
+          {/* Trip Direction Toggle (Only if not in progress) */}
+          <div className="flex rounded-xl bg-black/10 p-1">
+            <button
+              onClick={() => tripState === "not-started" && setTripDirection("to-school")}
+              disabled={tripState === "in-progress"}
+              className={cn(
+                "flex-1 rounded-lg py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
+                tripDirection === "to-school" ? "bg-white text-primary shadow-sm" : "text-primary-foreground/60"
+              )}
+            >
+              To School
+            </button>
+            <button
+              onClick={() => tripState === "not-started" && setTripDirection("from-school")}
+              disabled={tripState === "in-progress"}
+              className={cn(
+                "flex-1 rounded-lg py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
+                tripDirection === "from-school" ? "bg-white text-primary shadow-sm" : "text-primary-foreground/60"
+              )}
+            >
+              From School
+            </button>
           </div>
         </div>
-
-        {/* Vehicle Picker */}
-        {showVehiclePicker && (
-          <div className="mt-2 flex flex-col gap-1 overflow-hidden rounded-xl bg-primary-foreground/5 p-1 border border-primary-foreground/10 animate-in fade-in slide-in-from-top-2 duration-200">
-            {vehicles.map((v) => (
-              <button key={v.id} onClick={() => { setSelectedVehicle(v); setShowVehiclePicker(false) }}
-                className={cn("flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  selectedVehicle?.id === v.id ? "bg-primary-foreground text-primary" : "text-primary-foreground/80 hover:bg-primary-foreground/10"
-                )}>
-                <span>{v.plate_number}</span>
-                <span className="text-[10px] opacity-60 capitalize">{v.type}</span>
-              </button>
-            ))}
-            {vehicles.length === 0 && <p className="px-3 py-2 text-xs text-primary-foreground/40 italic">No vehicles found</p>}
-          </div>
-        )}
       </div>
 
       {/* ── GPS Error ────────────────────────────────────────────────── */}
@@ -430,6 +464,7 @@ function DriverDashboardContent() {
                 plate_number: selectedVehicle.plate_number
               }
             } : {}}
+            filterToMeta={true}
           />
         </div>
         <div className="flex items-center justify-between px-4 py-2 border-t border-border/50 bg-card/50">

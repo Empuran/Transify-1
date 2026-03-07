@@ -87,6 +87,10 @@ export async function POST(req: NextRequest) {
 
         // ── Audit Log ────────────────────────────────────────────────────────
         if (admin_id && admin_email) {
+            const changedFields = Object.keys(updateData)
+                .filter(k => k !== 'updated_at')
+                .filter(k => JSON.stringify(updateData[k]) !== JSON.stringify(oldData?.[k]));
+
             await createAuditLog({
                 action: "update",
                 entity_type: "route",
@@ -94,7 +98,7 @@ export async function POST(req: NextRequest) {
                 admin_id,
                 admin_email,
                 organization_id,
-                details: `Updated route ${routeName || oldData?.route_name}.`
+                details: `Updated route ${routeName || oldData?.route_name}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`
             });
         }
 

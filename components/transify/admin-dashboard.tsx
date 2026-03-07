@@ -22,7 +22,7 @@ import { AdminManagement } from "./admin-management"
 import { LiveMap } from "./live-map"
 import { useRouter } from "next/navigation"
 
-type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins" | "audit-log"
+type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
 type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -35,24 +35,32 @@ type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 // ── Status Badge ──────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
+  const s = status.toLowerCase()
+  const isSuccess = ["on-time", "on-duty", "at-school", "active", "online"].includes(s)
+  const isWarning = ["delayed", "idle"].includes(s)
+  const isDanger = ["emergency", "sos", "offline"].includes(s)
+  const isPrimary = ["on-bus", "in-progress", "moving"].includes(s)
+
+  // Capitalize each word
+  const label = status.split(/[-_ ]/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ")
+
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap",
-      status === "on-time" ? "bg-success/10 text-success" :
-        status === "delayed" ? "bg-warning/10 text-warning" :
-          status === "emergency" ? "bg-destructive/10 text-destructive" :
-            status === "on-duty" ? "bg-success/10 text-success" :
-              status === "off-duty" ? "bg-muted text-muted-foreground" :
-                status === "on-bus" ? "bg-primary/10 text-primary" :
-                  status === "at-school" ? "bg-teal/10 text-teal" :
-                    "bg-muted text-muted-foreground"
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wide transition-colors whitespace-nowrap",
+      isSuccess ? "bg-success/15 text-success" :
+        isWarning ? "bg-warning/15 text-warning" :
+          isDanger ? "bg-destructive/15 text-destructive" :
+            isPrimary ? "bg-primary/15 text-primary" :
+              "bg-muted text-muted-foreground"
     )}>
       <span className={cn("h-1.5 w-1.5 rounded-full",
-        status === "on-time" || status === "on-duty" || status === "at-school" ? "bg-success" :
-          status === "delayed" ? "bg-warning" :
-            status === "emergency" ? "bg-destructive" :
-              status === "on-bus" ? "bg-primary" : "bg-muted-foreground"
+        isSuccess ? "bg-success" :
+          isWarning ? "bg-warning" :
+            isDanger ? "bg-destructive" :
+              isPrimary ? "bg-primary" : "bg-muted-foreground"
       )} />
-      {status.replace(/-/g, " ")}
+      {label}
     </span>
   )
 }
@@ -465,14 +473,10 @@ export function AdminDashboard() {
         { id: "routes", label: "Routes", icon: Route },
       ],
     },
-    {
-      group: "System",
-      items: [
-        ...(isSuperAdmin ? [{ id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck }] : []),
-        ...(isSuperAdmin ? [{ id: "audit-log" as ActiveSection, label: "Audit Log", icon: FileText }] : []),
-        ...(isSuperAdmin ? [{ id: "settings" as ActiveSection, label: "Settings", icon: Settings }] : []),
-      ],
-    },
+        { group: "System", items: [
+          ...(isSuperAdmin ? [{ id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck }] : []),
+          ...(isSuperAdmin ? [{ id: "settings" as ActiveSection, label: "Settings", icon: Settings }] : []),
+        ] },
   ]
 
   const sectionLabel = navGroups.flatMap(g => g.items).find(n => n.id === section)?.label ?? "Overview"
@@ -620,7 +624,7 @@ export function AdminDashboard() {
               {/* Fleet Overview header + date range */}
               <div className="flex flex-wrap items-center gap-3">
                 <div>
-                  <h1 className="text-2xl font-bold text-foreground">Fleet Overview 👋</h1>
+                  <h1 className="text-2xl font-bold text-foreground">Fleet Overview</h1>
                   <p className="text-sm text-muted-foreground mt-1">Real-time fleet stats for the selected period.</p>
                 </div>
                 <div className="ml-auto flex items-center gap-2 flex-wrap">
@@ -886,7 +890,6 @@ export function AdminDashboard() {
                       </th>
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">ID</th>
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Route</th>
-                      <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Status</th>
                       <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-muted-foreground">Actions</th>
                     </tr>
                   </thead>
@@ -897,7 +900,6 @@ export function AdminDashboard() {
                         <td className="px-5 py-3 text-muted-foreground">{isCorporate ? (s.dept || s.department || "—") : (s.grade || s.class || "—")}</td>
                         <td className="px-5 py-3 font-mono text-xs text-muted-foreground">{s.memberId || s.student_id || s.id || "—"}</td>
                         <td className="px-5 py-3 text-muted-foreground">{s.route || s.route_name || "—"}</td>
-                        <td className="px-5 py-3"><StatusBadge status={s.status || "active"} /></td>
                         <td className="px-5 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button onClick={() => { setEditingStudent(s); setActiveForm("student") }}
@@ -971,7 +973,10 @@ export function AdminDashboard() {
                         <span className="text-sm font-bold text-primary">{d.name?.split(" ").map((n: string) => n[0]).join("")}</span>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-foreground truncate">{d.name}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-foreground truncate">{d.name}</p>
+                          <StatusBadge status={d.status || "off-duty"} />
+                        </div>
                         <p className="text-xs text-muted-foreground truncate">{d.phone || "—"}</p>
                       </div>
                     </div>
@@ -1234,11 +1239,6 @@ export function AdminDashboard() {
           {/* ADMIN MANAGEMENT (Super Admin only) */}
           {section === "admins" && adminSession && (
             <AdminManagement adminSession={adminSession} />
-          )}
-
-          {/* AUDIT LOG (Super Admin only) */}
-          {section === "audit-log" && isSuperAdmin && (
-            <AuditLogSection organizationId={adminSession?.organization_id} />
           )}
 
         </main>

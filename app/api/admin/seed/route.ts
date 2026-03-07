@@ -17,7 +17,7 @@ export async function POST() {
             if (connError.code === 5) {
                 return NextResponse.json({
                     error: "Firestore database not found. Please go to Firebase Console → Firestore Database → Create Database (select a location and start in production mode or test mode). Then try again.",
-                    help: "https://console.firebase.google.com/project/transify-6b187/firestore",
+                    help: `https://console.firebase.google.com/project/${process.env.FIREBASE_PROJECT_ID}/firestore`,
                 }, { status: 503 });
             }
             throw connError;

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase } from "lucide-react"
+import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -19,6 +19,7 @@ export interface StudentData {
     memberId: string
     parentPhone: string
     route: string
+    vehicle_id: string
     organization: string
 }
 
@@ -32,13 +33,16 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         memberId: initialData?.memberId || initialData?.student_id || "",
         parentPhone: initialData?.parentPhone || initialData?.parent_phone || "",
         route: initialData?.route || initialData?.route_name || "",
+        vehicle_id: initialData?.vehicle_id || "",
         organization: initialData?.organization || "",
     })
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
+    const [showVehicle, setShowVehicle] = useState(false)
     const [showSection, setShowSection] = useState(false)
     const [saved, setSaved] = useState(false)
     const [routeOptions, setRouteOptions] = useState<string[]>(["Unassigned"])
+    const [vehicleOptions, setVehicleOptions] = useState<{ id: string; plate: string }[]>([])
 
     // Fetch real routes from Firestore
     useEffect(() => {
@@ -53,6 +57,15 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                 if (d.routes) {
                     const names = d.routes.map((ro: any) => ro.route_name)
                     setRouteOptions([...names, "Unassigned"])
+                }
+            }).catch(() => { })
+
+        fetch(`/api/vehicles/list?organization_id=${orgId}`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.vehicles) {
+                    const vMap = d.vehicles.map((v: any) => ({ id: v.id, plate: v.plate_number || v.id }))
+                    setVehicleOptions([{ id: "Unassigned", plate: "Unassigned" }, ...vMap])
                 }
             }).catch(() => { })
     }, [])
@@ -175,27 +188,53 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                         </div>
                     </div>
 
-                    {/* Route */}
-                    <div className="flex flex-col gap-1.5">
-                        <label className="text-sm font-semibold text-foreground">Assign Route</label>
-                        <button onClick={() => setShowRoute(!showRoute)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
-                            <div className="flex items-center gap-2">
-                                <Route className="h-4 w-4 text-muted-foreground" />
-                                <span className={cn("text-sm", data.route ? "text-foreground" : "text-muted-foreground")}>{data.route || "Select route"}</span>
-                            </div>
-                            <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showRoute && "rotate-180")} />
-                        </button>
-                        {showRoute && (
-                            <div className="mt-1 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
-                                {routeOptions.map((r) => (
-                                    <button key={r} onClick={() => { setData({ ...data, route: r }); setShowRoute(false) }}
-                                        className={cn("flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-left transition-colors", data.route === r ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
-                                        {data.route === r && <Check className="h-3.5 w-3.5 shrink-0" />}
-                                        {r}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
+                    {/* Route & Vehicle */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-semibold text-foreground">Assign Route</label>
+                            <button onClick={() => { setShowRoute(!showRoute); setShowVehicle(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <Route className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    <span className={cn("text-xs truncate", data.route ? "text-foreground" : "text-muted-foreground")}>{data.route || "Select route"}</span>
+                                </div>
+                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform shrink-0", showRoute && "rotate-180")} />
+                            </button>
+                            {showRoute && (
+                                <div className="absolute z-10 mt-20 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-40 overflow-y-auto min-w-[160px]">
+                                    {routeOptions.map((r) => (
+                                        <button key={r} onClick={() => { setData({ ...data, route: r }); setShowRoute(false) }}
+                                            className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.route === r ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                            {data.route === r && <Check className="h-3 w-3 shrink-0" />}
+                                            {r}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-semibold text-foreground">Assign Vehicle</label>
+                            <button onClick={() => { setShowVehicle(!showVehicle); setShowRoute(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <Bus className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    <span className={cn("text-xs truncate", data.vehicle_id ? "text-foreground" : "text-muted-foreground")}>
+                                        {vehicleOptions.find(v => v.id === data.vehicle_id)?.plate || "Select vehicle"}
+                                    </span>
+                                </div>
+                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform shrink-0", showVehicle && "rotate-180")} />
+                            </button>
+                            {showVehicle && (
+                                <div className="absolute z-10 mt-20 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-40 overflow-y-auto min-w-[160px]">
+                                    {vehicleOptions.map((v) => (
+                                        <button key={v.id} onClick={() => { setData({ ...data, vehicle_id: v.id }); setShowVehicle(false) }}
+                                            className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.vehicle_id === v.id ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                            {data.vehicle_id === v.id && <Check className="h-3 w-3 shrink-0" />}
+                                            {v.plate}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Organization */}

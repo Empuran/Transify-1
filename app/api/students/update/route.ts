@@ -32,6 +32,10 @@ export async function PUT(req: NextRequest) {
 
         await ref.update(cleanUpdates);
 
+        const changedFields = Object.keys(cleanUpdates)
+            .filter(k => k !== 'updated_at')
+            .filter(k => JSON.stringify(cleanUpdates[k]) !== JSON.stringify(existing?.[k]));
+
         await createAuditLog({
             action: "update",
             entity_type: "student",
@@ -40,7 +44,7 @@ export async function PUT(req: NextRequest) {
             admin_name: admin_name || "",
             admin_email: admin_email || "",
             organization_id,
-            details: `Updated student ${existing?.name || id}: ${Object.keys(cleanUpdates).filter(k => k !== 'updated_at').join(', ')}`,
+            details: `Updated student ${existing?.name || id}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`,
         });
 
         return NextResponse.json({ success: true, message: "Student updated" });
