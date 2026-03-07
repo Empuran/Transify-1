@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
             vehicle_id: vehicleId || "Unassigned",
             organization: organization || "",
             organization_id,
-            status: "ACTIVE",
+            status: "off-duty",
             created_at: new Date().toISOString(),
         };
 

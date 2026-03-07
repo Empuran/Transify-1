@@ -14,7 +14,9 @@ import { StatusBadge } from "./status-badge"
 import { cn } from "@/lib/utils"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useLiveTracking } from "@/hooks/use-live-tracking"
-import { collection, onSnapshot, query, where } from "firebase/firestore"
+import { calcDistanceKm } from "@/lib/utils"
+import { useJsApiLoader } from "@react-google-maps/api"
+import { collection, onSnapshot, query, where, updateDoc, doc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { LiveMap } from "./live-map"
 
@@ -58,22 +60,39 @@ function VehicleMapIcon({ type, animate }: { type: string; animate?: boolean }) 
   return (
     <svg className={cls} viewBox="0 0 56 36" fill="none">
       <rect x="2" y="4" width="52" height="26" rx="4" fill="#3b82f6" />
-      <rect x="6" y="8" width="10" height="9" rx="1" fill="#bfdbfe" />
-      <rect x="20" y="8" width="10" height="9" rx="1" fill="#bfdbfe" />
-      <rect x="34" y="8" width="10" height="9" rx="1" fill="#bfdbfe" />
-      <rect x="2" y="22" width="52" height="4" rx="0" fill="#2563eb" />
-      <circle cx="12" cy="32" r="4" fill="#1e293b" /><circle cx="44" cy="32" r="4" fill="#1e293b" />
-      <circle cx="12" cy="32" r="2" fill="#64748b" /><circle cx="44" cy="32" r="2" fill="#64748b" />
+      <rect x="10" y="8" width="10" height="8" rx="1" fill="#bfdbfe" />
+      <rect x="23" y="8" width="10" height="8" rx="1" fill="#bfdbfe" />
+      <rect x="36" y="8" width="10" height="8" rx="1" fill="#bfdbfe" />
+      <circle cx="14" cy="30" r="4" fill="#1e293b" /><circle cx="42" cy="30" r="4" fill="#1e293b" />
     </svg>
   )
 }
 
-export function DriverDashboard() {
+const LIBRARIES: ("places")[] = ["places"]
+
+interface DriverDashboardProps {
+  profile?: any
+  resolvedOrgId?: string
+}
+
+export default function DriverDashboard(props: DriverDashboardProps) {
   return (
     <Suspense fallback={<div className="flex h-screen items-center justify-center bg-background"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>}>
-      <DriverDashboardContent />
+      <DriverDashboardWithAuth {...props} />
     </Suspense>
   )
+}
+
+function DriverDashboardWithAuth(props: DriverDashboardProps) {
+  const { isLoaded } = useJsApiLoader({
+    id: "google-map-script",
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+    libraries: LIBRARIES,
+  })
+
+  if (!isLoaded) return <div className="flex h-screen items-center justify-center bg-background"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>
+  
+  return <DriverDashboardContent isLoaded={isLoaded} {...props} />
 }
 
 // ── Geofence radius (metres) ─────────────────────────────────────────────────
@@ -90,7 +109,7 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 // ── Delay reasons ─────────────────────────────────────────────────────────────
 const DELAY_REASONS = ["Heavy Traffic", "Road Construction", "Vehicle Issue", "Weather", "Breakdown", "Accident Nearby", "Other"]
 
-function DriverDashboardContent() {
+function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const { profile, logoutMock } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -133,10 +152,39 @@ function DriverDashboardContent() {
   const [dynamicStops, setDynamicStops] = useState<any[]>([])
   const [currentStopIndex, setCurrentStopIndex] = useState(0)
   const [isAtStop, setIsAtStop] = useState(false)
+  const [geocodedStops, setGeocodedStops] = useState<{ lat: number; lng: number }[]>([])
+  const [deviationAlertSent, setDeviationAlertSent] = useState(false)
   // Track if we already auto-advanced to avoid double-trigger
   const lastAutoStopRef = useRef(-1)
 
   const normalize = (p: string) => p?.replace(/\D/g, '').slice(-10)
+
+  // ── Notify admin helper ──────────────────────────────────────────────────
+  const notifyAdmin = useCallback((type: string, title: string, message: string, extra?: any) => {
+    fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organization_id: resolvedOrgId,
+        type, title, message,
+        metadata: {
+          driver_name: realName,
+          driver_phone: driverPhone || profile?.phone,
+          vehicle_id: selectedVehicle?.plate_number || selectedVehicle?.id,
+          vehicle_type: selectedVehicle?.type,
+          route_name: currentRoute?.route_name,
+          ...extra
+        }
+      })
+    }).catch(e => console.error("Notify fail:", e))
+
+    // Update Vehicle Status in Firestore if it's an alert
+    if (selectedVehicle?.id && (type === "delay" || type === "sos")) {
+      const status = type === "delay" ? "delayed" : "emergency"
+      const vehicleRef = doc(db, "vehicles", selectedVehicle.id)
+      updateDoc(vehicleRef, { status }).catch(e => console.error("Status update fail:", e))
+    }
+  }, [resolvedOrgId, realName, driverPhone, profile?.phone, selectedVehicle, currentRoute])
 
   // 1. Fetch driver info
   const fetchDriverInfo = useCallback(async () => {
@@ -209,6 +257,26 @@ function DriverDashboardContent() {
   useEffect(() => { if (resolvedOrgId) fetchVehicles() }, [resolvedOrgId, fetchVehicles])
   useEffect(() => { if (vehicles.length > 0 || (resolvedOrgId && profile?.phone)) fetchDriverInfo() }, [vehicles.length, fetchDriverInfo, resolvedOrgId, profile?.phone])
 
+  // 3b. Geocode stops for deviation checking
+  useEffect(() => {
+    if (!isLoaded || dynamicStops.length === 0) return
+    
+    const geocodeAll = async () => {
+      const geocoder = new window.google.maps.Geocoder()
+      const coords = await Promise.all(dynamicStops.map(s => 
+        new Promise<{ lat: number; lng: number } | null>((resolve) => {
+          geocoder.geocode({ address: s.name, componentRestrictions: { country: "IN" } }, (results, status) => {
+            if (status === "OK" && results?.[0]) {
+              resolve({ lat: results[0].geometry.location.lat(), lng: results[0].geometry.location.lng() })
+            } else resolve(null)
+          })
+        })
+      ))
+      setGeocodedStops(coords.filter((c): c is { lat: number; lng: number } => c !== null))
+    }
+    geocodeAll()
+  }, [isLoaded, dynamicStops])
+
   // 4. Live tracking
   const { location, error: gpsError } = useLiveTracking(
     selectedVehicle?.id || selectedVehicle?.plate_number || "",
@@ -223,25 +291,61 @@ function DriverDashboardContent() {
   const completedStops = currentStopIndex
   const totalStops = currentStops.length
 
-  // ── Notify admin helper ──────────────────────────────────────────────────
-  const notifyAdmin = useCallback((type: string, title: string, message: string, extra?: any) => {
-    fetch("/api/notifications", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organization_id: resolvedOrgId,
-        type, title, message,
-        metadata: {
-          driver_name: realName,
-          driver_phone: driverPhone || profile?.phone,
-          vehicle_id: selectedVehicle?.plate_number || selectedVehicle?.id,
-          vehicle_type: selectedVehicle?.type,
-          route_name: currentRoute?.route_name,
-          ...extra
-        }
-      })
-    }).catch(e => console.error("Notify fail:", e))
-  }, [resolvedOrgId, realName, driverPhone, profile?.phone, selectedVehicle, currentRoute])
+  // 4b. Route Deviation Monitoring
+  useEffect(() => {
+    if (tripState !== "in-progress" || !location || geocodedStops.length === 0 || deviationAlertSent) {
+      if (tripState === "in-progress" && geocodedStops.length === 0 && !deviationAlertSent) {
+        console.warn("Deviation monitoring active but no geocoded stops found.")
+      }
+      return
+    }
+
+    // Simple check: is the driver within a reasonable distance (2.5km) of ANY of the stops?
+    // Increased threshold to 2.5km to avoid false positives between distant stops
+    const isNearAnyStop = geocodedStops.some(stop => {
+      const dist = calcDistanceKm(location.latitude, location.longitude, stop.lat, stop.lng)
+      return dist < 2.5 
+    })
+
+    if (!isNearAnyStop) {
+      console.log("⚠️ Route deviation detected! Vehicle is far from any planned stop.")
+      setDeviationAlertSent(true)
+      notifyAdmin("route_deviation", "⚠️ Route Deviation Alert", 
+        `Vehicle ${selectedVehicle?.plate_number} has deviated from the assigned route!`,
+        { latitude: location.latitude, longitude: location.longitude }
+      )
+    }
+  }, [tripState, location, geocodedStops, deviationAlertSent, notifyAdmin, selectedVehicle])
+
+  // Reset deviation state when trip ends or starts
+  useEffect(() => {
+    if (tripState === "not-started") setDeviationAlertSent(false)
+  }, [tripState])
+
+  // 4c. Sync Progress to Firestore
+  useEffect(() => {
+    if (tripState !== "in-progress" || !selectedVehicle?.id) return
+
+    const total = dynamicStops.length
+    const current = currentStopIndex
+    const progress = total > 0 ? Math.round((current / total) * 100) : 0
+
+    const syncProgress = async () => {
+      try {
+        await updateDoc(doc(db, "vehicles", selectedVehicle.id), {
+          progress: progress,
+          current_stop: dynamicStops[current]?.name || "Moving",
+          total_stops: total,
+          last_progress_update: new Date().toISOString()
+        })
+      } catch (err) {
+        console.error("Failed to sync progress:", err)
+      }
+    }
+
+    syncProgress()
+  }, [currentStopIndex, dynamicStops, selectedVehicle?.id, tripState])
+
 
   // GPS warmup — silently pre-acquire fix when component mounts so trip start is instant
   useEffect(() => {
@@ -260,10 +364,16 @@ function DriverDashboardContent() {
     setIsAtStop(true)
     lastAutoStopRef.current = -1
     
-    // Update driver status in Firestore
     if (driverId) {
-      const { doc, setDoc } = await import("firebase/firestore")
-      setDoc(doc(db, "drivers", driverId), { status: "on-duty" }, { merge: true }).catch(console.error)
+      updateDoc(doc(db, "drivers", driverId), { status: "on-duty" }).catch(console.error)
+    }
+
+    if (selectedVehicle?.id) {
+      updateDoc(doc(db, "vehicles", selectedVehicle.id), { 
+        status: "on-duty",
+        progress: 0,
+        current_stop: dynamicStops[0]?.name || "Starting"
+      }).catch(console.error)
     }
 
     notifyAdmin("trip_start", "🚌 Trip Started",
@@ -273,10 +383,16 @@ function DriverDashboardContent() {
   const handleEndTrip = async () => {
     setTripState("completed")
     
-    // Update driver status in Firestore
     if (driverId) {
-      const { doc, setDoc } = await import("firebase/firestore")
-      setDoc(doc(db, "drivers", driverId), { status: "off-duty" }, { merge: true }).catch(console.error)
+      updateDoc(doc(db, "drivers", driverId), { status: "off-duty" }).catch(console.error)
+    }
+
+    if (selectedVehicle?.id) {
+      updateDoc(doc(db, "vehicles", selectedVehicle.id), { 
+        status: "off-duty",
+        progress: 0,
+        current_stop: "" 
+      }).catch(console.error)
     }
 
     notifyAdmin("trip_end", "🏁 Trip Ended",
@@ -293,8 +409,6 @@ function DriverDashboardContent() {
       const nextIdx = currentStopIndex + 1
       setCurrentStopIndex(nextIdx)
       setIsAtStop(true)
-      notifyAdmin("stop_reached", "📍 Stop Reached",
-        `Vehicle ${selectedVehicle?.plate_number} arrived at ${dynamicStops[nextIdx]?.name}.`)
     } else {
       handleEndTrip()
     }

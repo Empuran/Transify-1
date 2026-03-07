@@ -6,7 +6,7 @@ import {
   Search, Download, Route, UserPlus, BarChart3, TrendingUp,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed,
+  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,6 +40,7 @@ function StatusBadge({ status }: { status: string }) {
   const isWarning = ["delayed", "idle"].includes(s)
   const isDanger = ["emergency", "sos", "offline"].includes(s)
   const isPrimary = ["on-bus", "in-progress", "moving"].includes(s)
+  const isMuted = ["off-duty", "completed", "stationary"].includes(s)
 
   // Capitalize each word
   const label = status.split(/[-_ ]/)
@@ -52,13 +53,15 @@ function StatusBadge({ status }: { status: string }) {
         isWarning ? "bg-warning/15 text-warning" :
           isDanger ? "bg-destructive/15 text-destructive" :
             isPrimary ? "bg-primary/15 text-primary" :
-              "bg-muted text-muted-foreground"
+              isMuted ? "bg-muted text-muted-foreground" :
+                "bg-muted text-muted-foreground"
     )}>
       <span className={cn("h-1.5 w-1.5 rounded-full",
         isSuccess ? "bg-success" :
           isWarning ? "bg-warning" :
             isDanger ? "bg-destructive" :
-              isPrimary ? "bg-primary" : "bg-muted-foreground"
+              isPrimary ? "bg-primary" : 
+                isMuted ? "bg-muted-foreground" : "bg-muted-foreground"
       )} />
       {label}
     </span>
@@ -193,6 +196,9 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
+
+
+
 
 // ── Vehicle Icon Helper ────────────────────────────────────────────────────
 const getVehicleIcon = (type: string = "") => {
@@ -647,6 +653,8 @@ export function AdminDashboard() {
                 </div>
               </div>
 
+
+
               {/* 6 Stat tiles — all clickable */}
               {(() => {
                 const tripsNotStarted = vehiclesData.filter((v: any) => {
@@ -662,30 +670,31 @@ export function AdminDashboard() {
                   { key: "sos", label: "SOS Alerts", value: dashboardStats.sos.length, icon: AlertTriangle, color: "text-destructive", bg: "bg-destructive/10", border: dashboardStats.sos.length > 0 ? "border-destructive/30 bg-destructive/5" : "", items: dashboardStats.sos, type: "sos" },
                 ]
                 return (
-                  <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
                     {tiles.map((tile) => {
                       const Icon = tile.icon
                       return (
                         <button key={tile.key} onClick={() => setSelectedTile({ title: tile.label, items: tile.items, type: tile.type })}
                           className={cn(
-                            "rounded-2xl border border-border bg-card p-5 shadow-sm text-left transition-all hover:shadow-md hover:border-primary/20 active:scale-[0.98] cursor-pointer",
+                            "rounded-2xl border border-border bg-card p-3 shadow-sm text-left transition-all hover:shadow-md hover:border-primary/20 active:scale-[0.98] cursor-pointer flex flex-col justify-between",
                             tile.border
                           )}>
-                          <div className="flex items-center justify-between">
-                            <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", tile.bg)}>
-                              <Icon className={cn("h-5 w-5", tile.color)} />
+                          <div className="flex items-center justify-between w-full mb-2">
+                            <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg", tile.bg)}>
+                              <Icon className={cn("h-4 w-4", tile.color)} />
                             </div>
-                            <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
+                            <span className="text-2xl font-black text-foreground">{tile.value}</span>
                           </div>
-                          <p className="mt-3 text-3xl font-black text-foreground">{tile.value}</p>
-                          <p className="text-sm font-medium text-foreground">{tile.label}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {tile.items.length > 0 && tile.type !== "vehicles" && tile.type !== "not_started"
-                              ? `Last: ${new Date((tile.items as any[])[0]?.timestamp || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-                              : tile.type === "not_started" ? `${tile.value} vehicle(s) idle`
-                                : tile.type === "vehicles" ? `${tile.value} registered`
-                                  : "none today"}
-                          </p>
+                          <div>
+                            <p className="text-xs font-semibold text-foreground truncate">{tile.label}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5 truncate opacity-80">
+                              {tile.items.length > 0 && tile.type !== "vehicles" && tile.type !== "not_started"
+                                ? `Last: ${new Date((tile.items as any[])[0]?.timestamp || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                                : tile.type === "not_started" ? `${tile.value} idle`
+                                  : tile.type === "vehicles" ? `${tile.value} reg`
+                                    : "none today"}
+                            </p>
+                          </div>
                         </button>
                       )
                     })}
@@ -712,37 +721,7 @@ export function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                  <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Fleet Status</h3>
-                  <div className="flex flex-col gap-3">
-                    {vehiclesData.slice(0, 5).map((v: any) => (
-                      <div key={v.id} className="flex items-center gap-3">
-                        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
-                          v.status === "on-time" ? "bg-success/10" : v.status === "delayed" ? "bg-warning/10" : "bg-destructive/10"
-                        )}>
-                          {(() => {
-                            const Icon = getVehicleIcon(v.type);
-                            return <Icon className={cn("h-4 w-4",
-                              v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
-                            )} />;
-                          })()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold text-foreground">{v.plate_number || v.id}</span>
-                            <StatusBadge status={v.status} />
-                          </div>
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                            <div className={cn("h-full rounded-full",
-                              v.status === "on-time" ? "bg-success" : v.status === "delayed" ? "bg-warning" : "bg-destructive"
-                            )} style={{ width: `${v.progress}%` }} />
-                          </div>
-                        </div>
-                        <span className="text-xs text-muted-foreground shrink-0">{v.progress}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+
               </div>
 
               {/* Quick Actions */}
@@ -829,9 +808,25 @@ export function AdminDashboard() {
                         </div>
                         <StatusBadge status={v.status} />
                       </div>
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span><Users className="inline h-3 w-3 mr-1" />{v.members}</span>
-                        <span><Navigation className="inline h-3 w-3 mr-1" />{v.speed}</span>
+                      <div className="mt-1 pl-10">
+                        {/* Progress Bar */}
+                        {(v.status === "on-time" || v.status === "delayed" || v.status === "in-progress" || v.status === "active" || v.status === "moving") && typeof v.progress === 'number' && (
+                          <div className="mb-2.5">
+                            <div className="flex items-center justify-between text-[10px] font-medium text-muted-foreground mb-1">
+                              <span>Trip Progress</span>
+                              <span className="font-bold text-foreground">{v.progress}%</span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                              <div className={cn("h-full rounded-full transition-all duration-500",
+                                v.status === "on-time" ? "bg-success" : v.status === "delayed" ? "bg-warning" : "bg-primary"
+                              )} style={{ width: `${v.progress}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-4 text-xs font-medium text-muted-foreground">
+                          <span className="flex items-center"><Users className="inline h-3.5 w-3.5 mr-1.5 opacity-70" />{v.members || 0}</span>
+                          <span className="flex items-center"><Navigation className="inline h-3.5 w-3.5 mr-1.5 opacity-70" />{v.speed ? `${Math.round(v.speed)} km/h` : "Stationary"}</span>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -965,55 +960,83 @@ export function AdminDashboard() {
                 <span className="ml-auto text-xs text-muted-foreground">{filteredDrivers.length} of {driversData.length}</span>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {filteredDrivers.map((d, i) => (
-                  <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10">
-                        <span className="text-sm font-bold text-primary">{d.name?.split(" ").map((n: string) => n[0]).join("")}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-bold text-foreground truncate">{d.name}</p>
-                          <StatusBadge status={d.status || "off-duty"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground truncate">{d.phone || "—"}</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
-                      <span>{d.phone}</span>
-                      <span>License: <span className="font-semibold text-foreground">{d.license_number}</span> ({d.license_type})</span>
-                      <span>Vehicle: <span className="font-semibold text-foreground">{d.vehicle_id || "Unassigned"}</span></span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="flex items-center gap-1 flex-1">
-                        {[1, 2, 3, 4, 5].map(s => (
-                          <div key={s} className={cn("h-1.5 flex-1 rounded-full", s <= Math.floor(d.score || 0) ? "bg-warning" : "bg-muted")} />
-                        ))}
-                        <span className="ml-1 text-xs font-bold text-warning">{d.score || "-"}</span>
-                      </div>
-                      <div className="flex items-center gap-1 ml-2">
-                        <button onClick={() => setEditingDriver(d)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
-                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                        </button>
-                        <button onClick={() => {
-                          if (confirm(`Delete driver "${d.name}"?`)) {
-                            fetch("/api/drivers/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id }) })
-                              .then(() => { showToast("Driver deleted"); fetchDrivers() })
-                          }
-                        }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {filteredDrivers.length === 0 && (
-                  <div className="col-span-3 flex flex-col items-center gap-2 py-12 text-muted-foreground">
-                    <Filter className="h-8 w-8 opacity-40" />
-                    <p className="text-sm">No drivers match the current filters.</p>
-                  </div>
-                )}
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30">
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Driver</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Phone</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">License</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Assigned Vehicle</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground text-center">Status</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredDrivers.map((d, i) => (
+                        <tr key={i} className="group hover:bg-muted/30 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                                <span className="text-xs font-bold text-primary">{d.name?.split(" ").map((n: string) => n[0]).join("")}</span>
+                                <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card bg-success" />
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-sm font-bold text-foreground truncate">{d.name}</span>
+                                <span className="text-[10px] text-muted-foreground">ID: {d.id.slice(-6)}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-sm text-foreground">{d.phone || "—"}</td>
+                          <td className="px-5 py-4">
+                            <div className="flex flex-col">
+                              <span className="text-sm font-semibold text-foreground">{d.license_number}</span>
+                              <span className="text-[10px] text-muted-foreground uppercase">{d.license_type}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                             <div className="flex items-center gap-2">
+                               <Bus className="h-3.5 w-3.5 text-muted-foreground" />
+                               <span className="text-sm text-foreground">{d.vehicle_id || "Unassigned"}</span>
+                             </div>
+                          </td>
+                          <td className="px-5 py-4 text-center">
+                            <StatusBadge status={d.status || "off-duty"} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => setEditingDriver(d)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
+                              </button>
+                              <button onClick={() => {
+                                if (confirm(`Delete driver "${d.name}"?`)) {
+                                  fetch("/api/drivers/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id }) })
+                                    .then(() => { showToast("Driver deleted"); fetchDrivers() })
+                                }
+                              }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredDrivers.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-20 text-center">
+                            <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                              <div className="rounded-full bg-muted p-4">
+                                <Filter className="h-10 w-10 opacity-20" />
+                              </div>
+                              <p className="text-sm font-medium">No drivers match the current filters.</p>
+                              <button onClick={() => { setDriverStatusFilter("all"); setDriverLicenseFilter("all"); setDriverSearch("") }} className="text-xs text-primary hover:underline">Clear all filters</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1033,7 +1056,7 @@ export function AdminDashboard() {
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input placeholder="Search by plate or driver..." value={vehicleSearch} onChange={(e) => setVehicleSearch(e.target.value)} className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
                 </div>
-                <FilterDropdown label="Status" options={["on-time", "delayed", "emergency"]} value={vehicleStatusFilter} onChange={setVehicleStatusFilter} />
+                <FilterDropdown label="Status" options={["on-duty", "off-duty", "delayed", "emergency"]} value={vehicleStatusFilter} onChange={setVehicleStatusFilter} />
                 <FilterDropdown label="Type" options={["School Bus", "Mini Bus", "Van", "Shuttle"]} value={vehicleTypeFilter} onChange={setVehicleTypeFilter} />
                 {(vehicleStatusFilter !== "all" || vehicleTypeFilter !== "all" || vehicleSearch) && (
                   <button onClick={() => { setVehicleStatusFilter("all"); setVehicleTypeFilter("all"); setVehicleSearch("") }}
@@ -1044,58 +1067,106 @@ export function AdminDashboard() {
                 <span className="ml-auto text-xs text-muted-foreground">{filteredVehicles.length} of {vehiclesData.length}</span>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {filteredVehicles.map((v, i) => (
-                  <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl",
-                          v.status === "on-time" ? "bg-success/10" : v.status === "delayed" ? "bg-warning/10" : "bg-destructive/10"
-                        )}>
-                          <Bus className={cn("h-5 w-5",
-                            v.status === "on-time" ? "text-success" : v.status === "delayed" ? "text-warning" : "text-destructive"
-                          )} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold font-mono text-foreground">{v.plate_number || v.id}</p>
-                          <p className="text-xs text-muted-foreground">{v.type}</p>
-                        </div>
-                      </div>
-                      <StatusBadge status={v.status} />
-                    </div>
-                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                      <span><Route className="inline h-3 w-3 mr-1" />{v.route || "No route"}</span>
-                      <span><Users className="inline h-3 w-3 mr-1" />{v.capacity || 0} seats</span>
-                      <span><Navigation className="inline h-3 w-3 mr-1" />{v.driver_name || "Unassigned"}</span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                        <div className={cn("h-full rounded-full",
-                          v.status === "on-time" ? "bg-success" : v.status === "delayed" ? "bg-warning" : "bg-destructive"
-                        )} style={{ width: `${v.progress || 50}%` }} />
-                      </div>
-                      <div className="flex items-center gap-1 ml-2">
-                        <button onClick={() => setEditingVehicle(v)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
-                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                        </button>
-                        <button onClick={() => {
-                          if (confirm(`Delete vehicle "${v.plate_number || v.id}"?`)) {
-                            fetch("/api/vehicles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vehicle_id: v.id }) })
-                              .then(() => { showToast("Vehicle deleted"); fetchVehicles() })
-                          }
-                        }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {filteredVehicles.length === 0 && (
-                  <div className="col-span-3 flex flex-col items-center gap-2 py-12 text-muted-foreground">
-                    <Filter className="h-8 w-8 opacity-40" />
-                    <p className="text-sm">No vehicles match the current filters.</p>
-                  </div>
-                )}
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30">
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Vehicle</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Type</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Assigned Driver</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Active Route</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Status & Progress</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredVehicles.map((v, i) => (
+                        <tr key={i} className="group hover:bg-muted/30 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+                                v.status === "on-duty" || v.status === "on-time" ? "bg-success/10 text-success" : 
+                                v.status === "delayed" ? "bg-warning/10 text-warning" : "bg-destructive/10 text-destructive"
+                              )}>
+                                <Bus className="h-5 w-5" />
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-sm font-bold font-mono text-foreground">{v.plate_number || v.id}</span>
+                                <span className="text-[10px] text-muted-foreground uppercase">{v.organization_id?.split("-")[0]}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-sm text-foreground">{v.type}</td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                                <User className="h-3 w-3 text-primary" />
+                              </div>
+                              <span className="text-sm text-foreground">{v.driver_name || "Unassigned"}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-2">
+                              <Route className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-sm text-foreground">{v.route || "No Route"}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex flex-col gap-1 min-w-[140px]">
+                              <div className="flex items-center justify-between gap-3">
+                                <StatusBadge status={v.status} />
+                                <span className="text-[10px] font-bold text-muted-foreground">{typeof v.progress === 'number' ? v.progress.toFixed(0) : 0}%</span>
+                              </div>
+                              {v.current_stop && ["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && (
+                                <div className="text-[10px] font-medium text-primary/80 truncate mb-1">
+                                  {v.current_stop}
+                                </div>
+                              )}
+                              {/* Only show progress bar when on-duty or active alerts */}
+                              {["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && (
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                  <div 
+                                    className={cn("h-full rounded-full transition-all duration-500", 
+                                      v.status === "delayed" ? "bg-warning" : 
+                                      v.status === "emergency" ? "bg-destructive" : "bg-success"
+                                    )}
+                                    style={{ width: `${v.progress || 0}%` }} 
+                                  />
+                                </div>
+                              )}
+                              <div className="text-[10px] text-muted-foreground font-medium">
+                                {["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && v.speed ? `${Math.round(v.speed)} km/h` : "Stationary"}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => setEditingVehicle(v)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
+                              </button>
+                              <button onClick={() => {
+                                if (confirm(`Delete vehicle "${v.plate_number || v.id}"?`)) {
+                                  fetch("/api/vehicles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vehicle_id: v.id }) })
+                                    .then(() => { showToast("Vehicle deleted"); fetchVehicles() })
+                                }
+                              }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredVehicles.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-20 text-center text-muted-foreground">
+                            <p className="text-sm">No vehicles match the current filters.</p>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1123,49 +1194,79 @@ export function AdminDashboard() {
                 <span className="ml-auto text-xs text-muted-foreground">{filteredRoutes.length} routes</span>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                {filteredRoutes.map((v, i) => (
-                  <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                        <Route className="h-5 w-5 text-primary" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-foreground">{v.route_name}</p>
-                        <p className="text-xs text-muted-foreground">Vehicle: {v.vehicle_id || "Unassigned"}</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 text-center">
-                      <div className="rounded-xl bg-muted/50 p-2">
-                        <p className="text-lg font-bold text-foreground">{(v.stops || []).length}</p>
-                        <p className="text-[10px] text-muted-foreground">Stops</p>
-                      </div>
-                      <div className="rounded-xl bg-muted/50 p-2">
-                        <p className="text-lg font-bold text-foreground">{v.distance_km || "0"}km</p>
-                        <p className="text-[10px] text-muted-foreground">Distance</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-end gap-1">
-                      <button onClick={() => setEditingRoute(v)} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
-                        <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                      <button onClick={() => {
-                        if (confirm(`Delete route "${v.route_name}"?`)) {
-                          fetch("/api/routes/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ route_id: v.id }) })
-                            .then(() => { showToast("Route deleted"); fetchRoutes() })
-                        }
-                      }} className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {filteredRoutes.length === 0 && (
-                  <div className="col-span-2 flex flex-col items-center gap-2 py-12 text-muted-foreground">
-                    <Filter className="h-8 w-8 opacity-40" />
-                    <p className="text-sm">No routes match your search.</p>
-                  </div>
-                )}
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30">
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Route Name</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Vehicle</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Stops</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Distance</th>
+                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredRoutes.map((v, i) => (
+                        <tr key={i} className="group hover:bg-muted/30 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                                <Route className="h-5 w-5 text-primary" />
+                              </div>
+                              <span className="text-sm font-bold text-foreground">{v.route_name}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-sm text-foreground">{v.vehicle_id || "Unassigned"}</td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-1.5">
+                              <div className="flex -space-x-2">
+                                {(v.stops || []).slice(0, 3).map((_: any, idx: number) => (
+                                  <div key={idx} className="h-6 w-6 rounded-full border-2 border-card bg-muted flex items-center justify-center text-[10px] font-bold text-muted-foreground">
+                                    {idx + 1}
+                                  </div>
+                                ))}
+                                {(v.stops || []).length > 3 && (
+                                  <div className="h-6 w-6 rounded-full border-2 border-card bg-muted flex items-center justify-center text-[10px] font-bold text-muted-foreground">
+                                    +{(v.stops || []).length - 3}
+                                  </div>
+                                )}
+                              </div>
+                              <span className="text-xs text-muted-foreground">{(v.stops || []).length} stops</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                              {v.distance_km || "0"} km
+                            </span>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => setEditingRoute(v)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
+                              </button>
+                              <button onClick={() => {
+                                if (confirm(`Delete route "${v.route_name}"?`)) {
+                                  fetch("/api/routes/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ route_id: v.id }) })
+                                    .then(() => { showToast("Route deleted"); fetchRoutes() })
+                                }
+                              }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredRoutes.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-20 text-center text-muted-foreground">
+                            <p className="text-sm">No routes match your search.</p>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1303,17 +1404,23 @@ export function AdminDashboard() {
               {selectedTile.items.map((item: any, i: number) => {
                 // Vehicle tile
                 if (selectedTile.type === "vehicles" || selectedTile.type === "not_started") return (
-                  <div key={item.id || i} className="rounded-xl border border-border bg-muted/30 px-4 py-3 flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
-                      {(() => { const Icon = getVehicleIcon(item.type); return <Icon className="h-4 w-4 text-primary" /> })()}
+                  <div key={item.id || i} className="rounded-2xl border border-border bg-card p-4 shadow-sm flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+                          item.status === "on-time" ? "bg-success/10" : item.status === "delayed" ? "bg-warning/10" : item.status === "emergency" ? "bg-destructive/10" : "bg-muted/50"
+                        )}>
+                          {(() => { const Icon = getVehicleIcon(item.type); return <Icon className={cn("h-5 w-5", item.status === "on-time" ? "text-success" : item.status === "delayed" ? "text-warning" : item.status === "emergency" ? "text-destructive" : "text-muted-foreground")} /> })()}
+                        </div>
+                        <div className="flex flex-col">
+                          <div className="flex items-center gap-1.5">
+                            <span className={cn("h-2 w-2 rounded-full", item.status === "on-time" || item.status === "in-progress" || item.status === "active" || item.status === "moving" ? "bg-success" : item.status === "delayed" ? "bg-warning" : item.status === "emergency" ? "bg-destructive" : "bg-muted-foreground")} />
+                            <p className="text-sm font-bold text-foreground">{item.plate_number || item.id}</p>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground capitalize mt-0.5">{item.type || "vehicle"} · {item.driver_name || item.driver || "No driver"}</p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-foreground">{item.plate_number || item.id}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{item.type || "vehicle"} · {item.driver_name || item.driver || "No driver"}</p>
-                    </div>
-                    <span className={cn("text-[10px] font-bold capitalize px-2 py-1 rounded-full",
-                      item.status === "on-time" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
-                    )}>{item.status || "idle"}</span>
                   </div>
                 )
                 // Notification-based tiles (delay, sos, trip_start, trip_end)

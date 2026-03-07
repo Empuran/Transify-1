@@ -39,8 +39,15 @@ function PlacesInput({ value, onChange, placeholder, className, isLoaded }: { va
         })
         ac.addListener("place_changed", () => {
             const place = ac.getPlace()
-            if (place?.formatted_address) onChange(place.formatted_address)
-            else if (place?.name) onChange(place.name)
+            // Try to get the most descriptive name (usually combining name and address)
+            const inputVal = inputRef.current?.value
+            if (inputVal) {
+                onChange(inputVal)
+            } else if (place?.formatted_address) {
+                onChange(place.formatted_address)
+            } else if (place?.name) {
+                onChange(place.name)
+            }
         })
         autocompleteRef.current = ac
     }, [isLoaded, onChange])

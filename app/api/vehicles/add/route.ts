@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
             driver_name: driverName || "Unassigned",
             fuel_type: fuelType || "",
             organization_id,
-            status: "on-time",
+            status: "off-duty",
             progress: 0,
             created_at: new Date().toISOString(),
         };

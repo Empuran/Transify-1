@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { GoogleMap, useJsApiLoader, Marker, Polyline, DirectionsRenderer } from "@react-google-maps/api";
-import { Loader2 } from "lucide-react";
+import { GoogleMap, useJsApiLoader, Marker, Polyline, DirectionsRenderer, InfoWindow } from "@react-google-maps/api";
+import { Loader2, Activity, Navigation, Clock } from "lucide-react";
 import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -22,9 +22,10 @@ function getVehicleEmoji(type: string = ""): string {
 }
 
 // ── Build a data-URI SVG marker for the vehicle (lightweight, no external URL) ─
-function makeSvgMarkerUrl(type: string = "", status: string = "on-time"): string {
+function makeSvgMarkerUrl(type: string = "", status: string = "on-time", isSelected: boolean = false): string {
     const t = type.toLowerCase();
     const statusColor = status === "emergency" ? "#ef4444" : status === "delayed" ? "#f59e0b" : "#22c55e";
+    const selectedScale = isSelected ? 1.2 : 1;
 
     let vehicleSvg = "";
     if (t.includes("car")) {
@@ -64,7 +65,10 @@ function makeSvgMarkerUrl(type: string = "", status: string = "on-time"): string
 <circle cx="34" cy="31" r="5" fill="#1e293b"/><circle cx="34" cy="31" r="3" fill="#475569"/>`;
     }
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 40" width="44" height="40">
+    const glow = isSelected ? `<circle cx="22" cy="20" r="28" fill="${statusColor}33" />` : '';
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 40" width="44" height="40" style="transform: scale(${selectedScale}); transform-origin: center;">
+${glow}
 ${vehicleSvg}
 <circle cx="38" cy="6" r="6" fill="${statusColor}" stroke="white" stroke-width="1.5"/>
 </svg>`;
@@ -221,6 +225,8 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
         return () => unsubscribers.forEach((u) => u());
     }, [vehicles]);
 
+    const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+
     const onLoad = useCallback((m: google.maps.Map) => setMap(m), []);
     const onUnmount = useCallback(() => setMap(null), []);
 
@@ -246,7 +252,23 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
     // Stop label alphabet
     const STOP_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+    // Format speed
+    const formatSpeed = (speed: number | null) => speed !== null && speed > 0 ? `${Math.round(speed)} km/h` : "Idle";
+
+    // Helper to calculate distance between two coordinates in km
+    const calcDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+        const R = 6371; // km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
+
     return (
+        <div className="relative w-full h-full">
         <GoogleMap
             mapContainerStyle={containerStyle}
             center={center}
@@ -254,6 +276,7 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
             onLoad={onLoad}
             onUnmount={onUnmount}
             options={{ disableDefaultUI: true, zoomControl: true, mapTypeControl: false, fullscreenControl: true }}
+            onClick={() => setSelectedVehicleId(null)}
         >
             {/* ── Vehicle markers ─────────────────────────────────────── */}
             {vehicles.filter(v => {
@@ -263,8 +286,25 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
                 const meta = vehicleMeta[v.id] || vehicleMeta[v.plate_number || ""] || Object.values(vehicleMeta).find(m => m.plate_number === v.plate_number) || {};
                 const vType = v.vehicle_type || meta.type || "car"; // default to car if unknown since car is most common in this app
                 const vStatus = v.status || "on-time";
-                const markerUrl = makeSvgMarkerUrl(vType, vStatus);
+                const isSelected = selectedVehicleId === v.id;
+                const markerUrl = makeSvgMarkerUrl(vType, vStatus, isSelected);
                 const label = meta.plate_number || v.plate_number || v.id.slice(0, 6);
+                
+                // Calculate simple distance/ETA based on history vs current
+                const history = historyByVehicle[v.id] || [];
+                let distanceStr = "0.0 km";
+                let etaStr = "-- mins";
+                if (history.length > 0) {
+                    const start = history[0];
+                    const d = calcDistanceKm(start.lat, start.lng, v.latitude, v.longitude);
+                    distanceStr = `${d.toFixed(1)} km`;
+                    if (v.speed && v.speed > 0) {
+                        // Very rough ETA to destination assuming standard 15km trip length for testing
+                        const remaining = Math.max(0, 15 - d);
+                        const mins = Math.round((remaining / v.speed) * 60);
+                        etaStr = `${mins} mins`;
+                    }
+                }
 
                 return (
                     <div key={v.id}>
@@ -295,18 +335,21 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
                             position={{ lat: v.latitude, lng: v.longitude }}
                             icon={{
                                 url: markerUrl,
-                                scaledSize: new window.google.maps.Size(52, 48),
-                                anchor: new window.google.maps.Point(26, 24),
+                                scaledSize: new window.google.maps.Size(isSelected ? 62 : 52, isSelected ? 57 : 48),
+                                anchor: new window.google.maps.Point(isSelected ? 31 : 26, isSelected ? 28 : 24),
                             }}
-                            label={{
+                            label={!isSelected ? {
                                 text: label,
                                 color: "#1e293b",
                                 fontSize: "9px",
                                 fontWeight: "bold",
                                 className: "gmaps-plate-label",
-                            }}
+                            } : undefined}
                             title={`${label} — ${vType}`}
+                            onClick={() => setSelectedVehicleId(v.id)}
+                            zIndex={isSelected ? 100 : 1}
                         />
+
                     </div>
                 );
             })}
@@ -366,5 +409,7 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
                 })
             )}
         </GoogleMap>
+        </div>
     );
 }
+

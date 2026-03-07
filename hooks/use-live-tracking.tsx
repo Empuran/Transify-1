@@ -28,11 +28,12 @@ export function useLiveTracking(vehicleId: string, isActive: boolean, organizati
 
             watchId = navigator.geolocation.watchPosition(
                 async (position) => {
+                    const speedKmh = position.coords.speed ? Math.round(position.coords.speed * 3.6) : 0
                     const newLoc: LocationUpdate = {
                         latitude: position.coords.latitude,
                         longitude: position.coords.longitude,
-                        heading: position.coords.heading,   // direction 0-360°
-                        speed: position.coords.speed,       // m/s
+                        heading: position.coords.heading,
+                        speed: speedKmh,
                         timestamp: position.timestamp,
                     }
 
@@ -57,16 +58,13 @@ export function useLiveTracking(vehicleId: string, isActive: boolean, organizati
                             recorded_at: serverTimestamp(),
                         })
 
-                        // 3. Sync status back to main vehicles collection
-                        // This ensures Admin Dashboard filters (StatusBadge) show the vehicle as active
+                        // 3. Update last position heartbeat and cached speed for list views
                         await setDoc(doc(db, "vehicles", vehicleId), {
-                            status: "on-time",
-                            organization_id: organizationId, // Keep sync for safety
+                            speed: newLoc.speed,
                             last_position_update: new Date().toISOString(),
                         }, { merge: true })
                     } catch (err: any) {
                         console.error("Failed to push location:", err)
-                        // Note: Offline queue (IndexedDB) will be added in the Capacitor native phase
                     }
                 },
                 (err) => {
@@ -74,9 +72,9 @@ export function useLiveTracking(vehicleId: string, isActive: boolean, organizati
                     console.error("Geolocation error:", err)
                 },
                 {
-                    enableHighAccuracy: true,   // Uses GPS chip, not WiFi/cell tower triangulation
-                    maximumAge: 0,              // Never use a cached position
-                    timeout: 10000,             // Give 10s to get a fix (more lenient on low signal)
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000,
                 }
             )
         }
@@ -85,20 +83,20 @@ export function useLiveTracking(vehicleId: string, isActive: boolean, organizati
             startTracking()
         }
 
-        // On trip end: mark vehicle as inactive
         return () => {
             if (watchId) {
                 navigator.geolocation.clearWatch(watchId)
             }
-            if (isActive && vehicleId) {
+            if (vehicleId) {
                 setDoc(doc(db, "live_locations", vehicleId), {
                     status: "inactive",
+                    speed: 0,
                     last_updated: new Date().toISOString(),
                 }, { merge: true }).catch(() => { })
 
-                // Mark vehicle as off-duty in main collection
+                // Also reset speed in vehicles collection
                 setDoc(doc(db, "vehicles", vehicleId), {
-                    status: "off-duty",
+                    speed: 0,
                 }, { merge: true }).catch(() => { })
             }
         }
