@@ -16,7 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useLiveTracking } from "@/hooks/use-live-tracking"
 import { calcDistanceKm } from "@/lib/utils"
 import { useJsApiLoader } from "@react-google-maps/api"
-import { collection, onSnapshot, query, where, updateDoc, doc } from "firebase/firestore"
+import { collection, onSnapshot, query, where, updateDoc, doc, addDoc, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { LiveMap } from "./live-map"
 
@@ -156,6 +156,10 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const [deviationAlertSent, setDeviationAlertSent] = useState(false)
   // Track if we already auto-advanced to avoid double-trigger
   const lastAutoStopRef = useRef(-1)
+  // Track proximity alerts sent to avoid spamming
+  const proximityAlertsSent = useRef<Set<number>>(new Set())
+  // Track active trip_sessions doc ID (for updating on trip end)
+  const activeTripDocId = useRef<string | null>(null)
 
   const normalize = (p: string) => p?.replace(/\D/g, '').slice(-10)
 
@@ -239,9 +243,13 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
         const route = routeDoc.data()
         setCurrentRoute({ id: routeDoc.id, ...route })
         const baseStops = [
-          { name: route.start_point, lat: null, lng: null },
-          ...(route.stops || []).map((s: string) => ({ name: s, lat: null, lng: null })),
-          { name: route.end_point, lat: null, lng: null }
+          { name: route.start_point, lat: route.start_lat ?? null, lng: route.start_lng ?? null },
+          ...(route.stops || []).map((s: any) => (
+            typeof s === 'string' 
+              ? { name: s, lat: null, lng: null } 
+              : { name: s.name, lat: s.lat ?? null, lng: s.lng ?? null }
+          )),
+          { name: route.end_point, lat: route.end_lat ?? null, lng: route.end_lng ?? null }
         ]
         // If from-school, reverse the entire sequence
         if (tripDirection === "from-school") {
@@ -315,11 +323,40 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
         { latitude: location.latitude, longitude: location.longitude }
       )
     }
-  }, [tripState, location, geocodedStops, deviationAlertSent, notifyAdmin, selectedVehicle])
+
+    // --- PROXIMITY ALERT LOGIC ---
+    // If not at stop, check distance to the NEXT stop (indexed by currentStopIndex)
+    if (!isAtStop && geocodedStops[currentStopIndex]) {
+      const nextStop = geocodedStops[currentStopIndex]
+      const dist = calcDistanceKm(location.latitude, location.longitude, nextStop.lat, nextStop.lng)
+      
+      // ~1.7km is roughly 5 mins at 20km/h
+      const PROXIMITY_THRESHOLD_KM = 1.7 
+
+      if (dist < PROXIMITY_THRESHOLD_KM && !proximityAlertsSent.current.has(currentStopIndex)) {
+        const stopName = dynamicStops[currentStopIndex]?.name || "Upcoming Stop"
+        console.log(`🔔 Sending proximity alert for stop: ${stopName}`)
+        
+        notifyAdmin("proximity", "🚌 Vehicle Approaching", 
+          `Vehicle ${selectedVehicle?.plate_number} is about 5 minutes away from ${stopName}`,
+          { 
+            stop_index: currentStopIndex, 
+            stop_name: stopName,
+            eta_minutes: 5,
+            proximity_alert: true 
+          }
+        )
+        proximityAlertsSent.current.add(currentStopIndex)
+      }
+    }
+  }, [tripState, location, geocodedStops, deviationAlertSent, notifyAdmin, selectedVehicle, isAtStop, currentStopIndex, dynamicStops])
 
   // Reset deviation state when trip ends or starts
   useEffect(() => {
-    if (tripState === "not-started") setDeviationAlertSent(false)
+    if (tripState === "not-started") {
+      setDeviationAlertSent(false)
+      proximityAlertsSent.current.clear()
+    }
   }, [tripState])
 
   // 4c. Sync Progress to Firestore
@@ -328,13 +365,20 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     const total = dynamicStops.length
     const current = currentStopIndex
-    const progress = total > 0 ? Math.round((current / total) * 100) : 0
+    
+    // Progress calculation: increments when arriving at each stop
+    // (current + 1 / total) when at stop, (current / total) when moving
+    const progress = total > 0 
+      ? Math.min(100, Math.round(((current + (isAtStop ? 1 : 0)) / total) * 100))
+      : 0
 
     const syncProgress = async () => {
       try {
         await updateDoc(doc(db, "vehicles", selectedVehicle.id), {
           progress: progress,
-          current_stop: dynamicStops[current]?.name || "Moving",
+          current_stop: isAtStop 
+            ? `At: ${dynamicStops[current]?.name || "Stop"}` 
+            : `Next: ${dynamicStops[current]?.name || "Moving"}`,
           total_stops: total,
           last_progress_update: new Date().toISOString()
         })
@@ -344,7 +388,24 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     }
 
     syncProgress()
-  }, [currentStopIndex, dynamicStops, selectedVehicle?.id, tripState])
+  }, [currentStopIndex, dynamicStops, selectedVehicle?.id, tripState, isAtStop])
+
+  // 4d. Automatic Stop detection (Geofencing)
+  useEffect(() => {
+    if (tripState !== "in-progress" || !location || !dynamicStops.length) return
+
+    const currentStop = dynamicStops[currentStopIndex]
+    if (currentStop && currentStop.lat !== null && currentStop.lng !== null) {
+      const dist = calcDistanceKm(location.latitude, location.longitude, currentStop.lat, currentStop.lng)
+      
+      // If within 100 meters and not already marked as arrived at this specific stop
+      if (dist < 0.1 && !isAtStop && lastAutoStopRef.current !== currentStopIndex) {
+        lastAutoStopRef.current = currentStopIndex
+        setIsAtStop(true)
+        console.log(`📍 Automatically reached stop: ${currentStop.name}`)
+      }
+    }
+  }, [location, currentStopIndex, dynamicStops, tripState, isAtStop])
 
 
   // GPS warmup — silently pre-acquire fix when component mounts so trip start is instant
@@ -376,6 +437,26 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       }).catch(console.error)
     }
 
+    // ── Write trip_sessions document so parent trips screen can show history ──
+    try {
+      const tripRef = await addDoc(collection(db, "trips"), {
+        route_name: currentRoute?.route_name || "—",
+        route_id: currentRoute?.id || "",
+        vehicle_id: selectedVehicle?.id || "",
+        vehicle_plate: selectedVehicle?.plate_number || "",
+        driver_id: driverId,
+        driver_name: realName,
+        direction: tripDirection,
+        status: "in-progress",
+        started_at: serverTimestamp(),
+        organization_id: resolvedOrgId,
+        stops: dynamicStops.map((s: any) => s.name),
+      })
+      activeTripDocId.current = tripRef.id
+    } catch (e) {
+      console.error("trip_sessions write error:", e)
+    }
+
     notifyAdmin("trip_start", "🚌 Trip Started",
       `Vehicle ${selectedVehicle?.plate_number} started the trip on route ${currentRoute?.route_name || "—"} (${tripDirection === 'to-school' ? 'To School' : 'From School'}).`)
   }
@@ -393,6 +474,15 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
         progress: 0,
         current_stop: "" 
       }).catch(console.error)
+    }
+
+    // ── Update the trips doc with ended_at + completed status ──
+    if (activeTripDocId.current) {
+      updateDoc(doc(db, "trips", activeTripDocId.current), {
+        status: "completed",
+        ended_at: serverTimestamp(),
+      }).catch(console.error)
+      activeTripDocId.current = null
     }
 
     notifyAdmin("trip_end", "🏁 Trip Ended",

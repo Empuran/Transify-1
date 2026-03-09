@@ -31,39 +31,49 @@ interface PremiumScreenProps {
 type PaymentStep = "plan" | "method" | "upi" | "card" | "processing" | "success"
 type PaymentMethod = "upi" | "card"
 
+const MERCHANT_UPI = "transify@upi" // Replace with your actual UPI ID
+
 const plans = [
-  {
-    id: "free",
-    name: "Free",
-    price: "0",
-    period: "",
-    features: ["Live tracking", "Basic alerts", "Single child", "Trip history (7 days)"],
-  },
   {
     id: "monthly",
     name: "Premium Monthly",
-    price: "299",
+    price: "99",
+    numericPrice: 99,
     period: "/mo",
     popular: true,
     features: [
-      "Everything in Free",
+      "Live tracking",
+      "Basic alerts",
       "Unlimited children",
+      "Trip history (30 days)",
+      "Driver scores",
+      "Priority SOS",
+    ],
+  },
+  {
+    id: "plus",
+    name: "Premium+ Monthly",
+    price: "199",
+    numericPrice: 199,
+    period: "/mo",
+    features: [
+      "Everything in Premium",
       "AI delay prediction",
       "Route replay",
-      "Driver scores",
       "Monthly reports",
-      "Priority SOS",
-      "Ad-free",
+      "Ad-free experience",
+      "Boarding stop ETA alerts",
     ],
   },
   {
     id: "yearly",
     name: "Premium Yearly",
-    price: "2,499",
+    price: "999",
+    numericPrice: 999,
     period: "/yr",
-    savings: "Save 30%",
+    savings: "Save 58%",
     features: [
-      "Everything in Monthly",
+      "Everything in Premium+",
       "Early arrival alerts",
       "Multi-guardian access",
       "CCTV add-on eligible",
@@ -96,7 +106,13 @@ export function PremiumScreen({ onClose, onSubscribe }: PremiumScreenProps) {
   const [expiry, setExpiry] = useState("")
   const [cvv, setCvv] = useState("")
 
-  const selectedPlan = plans.find(p => p.id === selectedPlanId) || plans[1]
+  const selectedPlan = plans.find(p => p.id === selectedPlanId) || plans[0]
+
+  // Build UPI deep link for the selected plan
+  const upiLink = `upi://pay?pa=${MERCHANT_UPI}&pn=Transify&am=${selectedPlan.numericPrice}&cu=INR&tn=${encodeURIComponent(selectedPlan.name)}`
+
+  // Build QR code URL using Google Charts API (free, no API key needed)
+  const qrUrl = `https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=${encodeURIComponent(upiLink)}&choe=UTF-8`
 
   const handleSubscribeClick = () => {
     setStep("method")
@@ -228,10 +244,9 @@ export function PremiumScreen({ onClose, onSubscribe }: PremiumScreenProps) {
 
             <Button
               onClick={handleSubscribeClick}
-              disabled={selectedPlanId === "free"}
               className="h-14 rounded-xl bg-highlight text-highlight-foreground font-bold text-base hover:bg-highlight/90"
             >
-              {selectedPlanId === "free" ? "Current Plan" : `Continue to Pay ₹${selectedPlan.price}`}
+              {`Continue to Pay ₹${selectedPlan.price}${selectedPlan.period}`}
             </Button>
           </>
         )}
@@ -295,40 +310,48 @@ export function PremiumScreen({ onClose, onSubscribe }: PremiumScreenProps) {
         {/* Step: UPI Payment */}
         {step === "upi" && (
           <div className="flex flex-col gap-6 pt-4 text-center">
-            <h2 className="text-xl font-bold text-foreground">Pay using UPI</h2>
+            <h2 className="text-xl font-bold text-foreground">Pay ₹{selectedPlan.price} via UPI</h2>
+            <p className="text-sm text-muted-foreground">{selectedPlan.name}</p>
 
-            {/* Mock QR Code */}
-            <div className="mx-auto flex aspect-square w-48 items-center justify-center rounded-2xl border-4 border-muted bg-white shadow-inner">
-              <div className="grid grid-cols-4 gap-1 p-4 opacity-70">
-                {Array.from({ length: 16 }).map((_, i) => (
-                  <div key={i} className={cn("h-8 w-8 rounded-sm", (i % 3 === 0 || i % 7 === 0) ? "bg-black" : "bg-muted")} />
-                ))}
-              </div>
+            {/* Real UPI QR Code (Google Charts) */}
+            <div className="mx-auto flex aspect-square w-52 items-center justify-center rounded-2xl border-2 border-muted bg-white shadow-md overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qrUrl} alt="UPI QR Code" className="w-full h-full object-contain" />
             </div>
-            <p className="text-xs text-muted-foreground">Scan QR code using any UPI app</p>
+            <p className="text-xs text-muted-foreground">Scan with Google Pay, PhonePe, Paytm or any UPI app</p>
+
+            {/* Open in UPI app directly */}
+            <a
+              href={upiLink}
+              className="flex items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 py-3 text-sm font-semibold text-primary"
+            >
+              <Smartphone className="h-4 w-4" />
+              Open in UPI App
+            </a>
 
             <div className="flex items-center gap-3">
               <div className="h-[1px] flex-1 bg-border" />
-              <span className="text-xs font-bold text-muted-foreground uppercase">OR</span>
+              <span className="text-xs font-bold text-muted-foreground uppercase">OR enter UPI ID</span>
               <div className="h-[1px] flex-1 bg-border" />
             </div>
 
             <div className="flex flex-col gap-3 text-left">
-              <label className="text-sm font-semibold text-foreground">Enter UPI ID</label>
+              <label className="text-sm font-semibold text-foreground">Your UPI ID</label>
               <Input
-                placeholder="username@bank"
+                placeholder="yourname@okicici / @ybl / @upi"
                 value={upiId}
                 onChange={(e) => setUpiId(e.target.value)}
                 className="h-12 rounded-xl bg-card"
               />
+              <p className="text-xs text-muted-foreground">Enter your UPI ID and click Pay — a collect request will be sent to you.</p>
             </div>
 
             <Button
               onClick={handlePaymentSubmit}
-              disabled={!upiId && !upiId.includes("@")}
+              disabled={upiId.length > 0 && !upiId.includes("@")}
               className="h-14 rounded-xl bg-highlight text-highlight-foreground font-bold text-base mt-2"
             >
-              Pay Securely
+              {upiId ? `Send Collect Request to ${upiId}` : "I have paid via QR / App"}
             </Button>
           </div>
         )}

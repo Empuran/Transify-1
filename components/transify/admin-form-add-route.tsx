@@ -15,11 +15,19 @@ interface AddRouteFormProps {
     onSave: (data: RouteData) => void
 }
 
+export interface Stop {
+    name: string
+    lat: number | null
+    lng: number | null
+}
+
 export interface RouteData {
     routeName: string
     startPoint: string
+    startCoords: { lat: number, lng: number } | null
     endPoint: string
-    stops: string[]
+    endCoords: { lat: number, lng: number } | null
+    stops: Stop[]
     vehicleId: string
     distance_km?: string
 }
@@ -27,7 +35,7 @@ export interface RouteData {
 // vehicleOptions is now fetched dynamically from Firestore
 
 // ── PlacesInput: Input with Google Places Autocomplete ────────────────
-function PlacesInput({ value, onChange, placeholder, className, isLoaded }: { value: string; onChange: (v: string) => void; placeholder: string; className?: string; isLoaded: boolean }) {
+function PlacesInput({ value, onChange, placeholder, className, isLoaded }: { value: string; onChange: (v: string, coords?: { lat: number, lng: number }) => void; placeholder: string; className?: string; isLoaded: boolean }) {
     const inputRef = useRef<HTMLInputElement>(null)
     const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null)
 
@@ -39,14 +47,18 @@ function PlacesInput({ value, onChange, placeholder, className, isLoaded }: { va
         })
         ac.addListener("place_changed", () => {
             const place = ac.getPlace()
-            // Try to get the most descriptive name (usually combining name and address)
+            const coords = place.geometry?.location ? {
+                lat: place.geometry.location.lat(),
+                lng: place.geometry.location.lng()
+            } : undefined
+            
             const inputVal = inputRef.current?.value
             if (inputVal) {
-                onChange(inputVal)
+                onChange(inputVal, coords)
             } else if (place?.formatted_address) {
-                onChange(place.formatted_address)
+                onChange(place.formatted_address, coords)
             } else if (place?.name) {
-                onChange(place.name)
+                onChange(place.name, coords)
             }
         })
         autocompleteRef.current = ac
@@ -73,8 +85,12 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
     const [data, setData] = useState<RouteData>({
         routeName: initialData?.route_name || "",
         startPoint: initialData?.start_point || "",
+        startCoords: initialData?.start_lat ? { lat: initialData.start_lat, lng: initialData.start_lng } : null,
         endPoint: initialData?.end_point || "",
-        stops: initialData?.stops || [""],
+        endCoords: initialData?.end_lat ? { lat: initialData.end_lat, lng: initialData.end_lng } : null,
+        stops: (initialData?.stops || [""]).map((s: any) => 
+            typeof s === 'string' ? { name: s, lat: null, lng: null } : { name: s.name, lat: s.lat, lng: s.lng }
+        ),
         vehicleId: initialData?.vehicle_id || "",
         distance_km: initialData?.distance_km || "0",
     })
@@ -101,12 +117,12 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
 
     const isValid = data.routeName.trim() && data.startPoint.trim() && data.endPoint.trim()
 
-    const addStop = () => setData(prev => ({ ...prev, stops: [...prev.stops, ""] }))
+    const addStop = () => setData(prev => ({ ...prev, stops: [...prev.stops, { name: "", lat: null, lng: null }] }))
     const removeStop = (i: number) => setData(prev => ({ ...prev, stops: prev.stops.filter((_, idx) => idx !== i) }))
-    const updateStop = (i: number, val: string) => {
+    const updateStop = (i: number, val: string, coords?: { lat: number, lng: number }) => {
         setData(prev => {
             const updated = [...prev.stops]
-            updated[i] = val
+            updated[i] = { name: val, lat: coords?.lat ?? updated[i].lat, lng: coords?.lng ?? updated[i].lng }
             return { ...prev, stops: updated }
         })
     }
@@ -125,7 +141,7 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
         if (!window.google) return
         setCalculating(true)
         try {
-            const validStops = data.stops.filter(s => s.trim())
+            const validStops = data.stops.filter(s => s.name.trim())
             const service = new window.google.maps.DirectionsService()
 
             // Calculate the continuous driving route
@@ -133,7 +149,10 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                 service.route({
                     origin: data.startPoint,
                     destination: data.endPoint,
-                    waypoints: validStops.map(s => ({ location: s, stopover: true })),
+                    waypoints: validStops.map(s => ({ 
+                        location: (s.lat !== null && s.lng !== null) ? { lat: s.lat, lng: s.lng } : s.name, 
+                        stopover: true 
+                    })),
                     travelMode: window.google.maps.TravelMode.DRIVING,
                 }, (result, status) => {
                     if (status === "OK" && result) resolve(result)
@@ -164,9 +183,19 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
 
         try {
             const endpoint = initialData ? "/api/routes/update" : "/api/routes/add"
-            const payload = initialData
-                ? { ...data, route_id: initialData.id, organization_id: orgId, stops: data.stops.filter(s => s.trim()), admin_id: adminData?.user_id, admin_email: adminData?.email }
-                : { ...data, stops: data.stops.filter(s => s.trim()), organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+            const filteredStops = data.stops.filter(s => s.name.trim())
+            const payload = {
+                ...data,
+                stops: filteredStops,
+                start_lat: data.startCoords?.lat,
+                start_lng: data.startCoords?.lng,
+                end_lat: data.endCoords?.lat,
+                end_lng: data.endCoords?.lng,
+                organization_id: orgId,
+                admin_id: adminData?.user_id,
+                admin_email: adminData?.email,
+                ...(initialData ? { route_id: initialData.id } : {})
+            }
 
             const res = await fetch(endpoint, {
                 method: "POST",
@@ -220,14 +249,14 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                             <label className="text-sm font-semibold text-foreground">Start Point</label>
                             <div className="relative">
                                 <div className="absolute left-3.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-success z-10" />
-                                <PlacesInput isLoaded={isLoaded} placeholder="Depot / Origin" value={data.startPoint} onChange={(v) => setData(prev => ({ ...prev, startPoint: v }))} className="pl-9" />
+                                <PlacesInput isLoaded={isLoaded} placeholder="Depot / Origin" value={data.startPoint} onChange={(v, coords) => setData(prev => ({ ...prev, startPoint: v, startCoords: coords ?? prev.startCoords }))} className="pl-9" />
                             </div>
                         </div>
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">End Point</label>
                             <div className="relative">
                                 <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-destructive z-10" />
-                                <PlacesInput isLoaded={isLoaded} placeholder="School / Office" value={data.endPoint} onChange={(v) => setData(prev => ({ ...prev, endPoint: v }))} className="pl-9" />
+                                <PlacesInput isLoaded={isLoaded} placeholder="School / Office" value={data.endPoint} onChange={(v, coords) => setData(prev => ({ ...prev, endPoint: v, endCoords: coords ?? prev.endCoords }))} className="pl-9" />
                             </div>
                         </div>
                     </div>
@@ -249,8 +278,8 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                                     <PlacesInput
                                         isLoaded={isLoaded}
                                         placeholder={`Stop ${i + 1} name`}
-                                        value={stop}
-                                        onChange={(v) => updateStop(i, v)}
+                                        value={stop.name}
+                                        onChange={(v, coords) => updateStop(i, v, coords)}
                                         className="flex-1"
                                     />
                                     {data.stops.length > 1 && (

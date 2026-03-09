@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus } from "lucide-react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus, MapPin } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -21,10 +21,14 @@ export interface StudentData {
     route: string
     vehicle_id: string
     organization: string
+    boarding_point?: { name: string; lat: number; lng: number } | null
 }
 
 const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
 const deptOptions = ["Engineering", "Design", "Marketing", "HR", "Finance", "Operations", "Legal", "Sales"]
+
+interface RouteStop { name: string; lat: number; lng: number }
+interface RouteOption { name: string; stops: RouteStop[]; id?: string }
 
 export function AddStudentForm({ onClose, onSave, isCorporate = false, initialData }: AddStudentFormProps) {
     const [data, setData] = useState<StudentData>({
@@ -35,16 +39,21 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         route: initialData?.route || initialData?.route_name || "",
         vehicle_id: initialData?.vehicle_id || "",
         organization: initialData?.organization || "",
+        boarding_point: initialData?.boarding_point || null,
     })
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
     const [showVehicle, setShowVehicle] = useState(false)
     const [showSection, setShowSection] = useState(false)
+    const [showBoarding, setShowBoarding] = useState(false)
     const [saved, setSaved] = useState(false)
-    const [routeOptions, setRouteOptions] = useState<string[]>(["Unassigned"])
+    const [routeOptions, setRouteOptions] = useState<RouteOption[]>([])
     const [vehicleOptions, setVehicleOptions] = useState<{ id: string; plate: string }[]>([])
 
-    // Fetch real routes from Firestore
+    // Stops from selected route
+    const [boardingStops, setBoardingStops] = useState<RouteStop[]>([])
+
+    // Fetch real routes with full stop data
     useEffect(() => {
         const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
         const adminData = session ? JSON.parse(session) : null
@@ -55,8 +64,35 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
             .then(r => r.json())
             .then(d => {
                 if (d.routes) {
-                    const names = d.routes.map((ro: any) => ro.route_name)
-                    setRouteOptions([...names, "Unassigned"])
+                    const mapped: RouteOption[] = d.routes.map((ro: any) => {
+                        // Build full stop list with lat/lng
+                        const stops: RouteStop[] = []
+                        if (ro.start_point) {
+                            stops.push({
+                                name: (ro.start_point as string).split(",")[0].trim(),
+                                lat: ro.start_lat || 0,
+                                lng: ro.start_lng || 0,
+                            })
+                        }
+                        if (Array.isArray(ro.stops)) {
+                            ro.stops.forEach((s: any) => {
+                                stops.push({
+                                    name: typeof s === "string" ? s.split(",")[0].trim() : (s.name || "Stop").split(",")[0].trim(),
+                                    lat: s.lat || 0,
+                                    lng: s.lng || 0,
+                                })
+                            })
+                        }
+                        if (ro.end_point) {
+                            stops.push({
+                                name: (ro.end_point as string).split(",")[0].trim(),
+                                lat: ro.end_lat || 0,
+                                lng: ro.end_lng || 0,
+                            })
+                        }
+                        return { name: ro.route_name, stops, id: ro.id }
+                    })
+                    setRouteOptions(mapped)
                 }
             }).catch(() => { })
 
@@ -69,6 +105,17 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                 }
             }).catch(() => { })
     }, [])
+
+    // When route changes, update boarding stop options
+    useEffect(() => {
+        const routeObj = routeOptions.find(r => r.name === data.route)
+        setBoardingStops(routeObj?.stops || [])
+        // Clear boarding point if route changed and old boarding point no longer valid
+        if (data.boarding_point && routeObj) {
+            const stillValid = routeObj.stops.some(s => s.name === data.boarding_point?.name)
+            if (!stillValid) setData(prev => ({ ...prev, boarding_point: null }))
+        }
+    }, [data.route, routeOptions])
 
     const isValid = data.name.trim() && data.grade && data.memberId.trim() && data.parentPhone.trim() && data.route
 
@@ -106,7 +153,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
 
     return (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-foreground/40 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="w-full max-w-md animate-in slide-in-from-bottom duration-300 rounded-t-3xl bg-card shadow-2xl">
+            <div className="w-full max-w-md animate-in slide-in-from-bottom duration-300 rounded-t-3xl bg-card shadow-2xl max-h-[92dvh] overflow-y-auto">
                 {/* Handle */}
                 <div className="mx-auto mt-3 h-1 w-10 rounded-full bg-muted" />
 
@@ -192,7 +239,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">Assign Route</label>
-                            <button onClick={() => { setShowRoute(!showRoute); setShowVehicle(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                            <button onClick={() => { setShowRoute(!showRoute); setShowVehicle(false); setShowBoarding(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
                                 <div className="flex items-center gap-2 overflow-hidden">
                                     <Route className="h-4 w-4 text-muted-foreground shrink-0" />
                                     <span className={cn("text-xs truncate", data.route ? "text-foreground" : "text-muted-foreground")}>{data.route || "Select route"}</span>
@@ -202,19 +249,23 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                             {showRoute && (
                                 <div className="absolute z-10 mt-20 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-40 overflow-y-auto min-w-[160px]">
                                     {routeOptions.map((r) => (
-                                        <button key={r} onClick={() => { setData({ ...data, route: r }); setShowRoute(false) }}
-                                            className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.route === r ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
-                                            {data.route === r && <Check className="h-3 w-3 shrink-0" />}
-                                            {r}
+                                        <button key={r.name} onClick={() => { setData({ ...data, route: r.name, boarding_point: null }); setShowRoute(false) }}
+                                            className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.route === r.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                            {data.route === r.name && <Check className="h-3 w-3 shrink-0" />}
+                                            {r.name}
                                         </button>
                                     ))}
+                                    <button onClick={() => { setData({ ...data, route: "Unassigned", boarding_point: null }); setShowRoute(false) }}
+                                        className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.route === "Unassigned" ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                        Unassigned
+                                    </button>
                                 </div>
                             )}
                         </div>
 
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">Assign Vehicle</label>
-                            <button onClick={() => { setShowVehicle(!showVehicle); setShowRoute(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                            <button onClick={() => { setShowVehicle(!showVehicle); setShowRoute(false); setShowBoarding(false) }} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
                                 <div className="flex items-center gap-2 overflow-hidden">
                                     <Bus className="h-4 w-4 text-muted-foreground shrink-0" />
                                     <span className={cn("text-xs truncate", data.vehicle_id ? "text-foreground" : "text-muted-foreground")}>
@@ -236,6 +287,53 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                             )}
                         </div>
                     </div>
+
+                    {/* ── Boarding Point (only shown when a route with stops is selected) ── */}
+                    {boardingStops.length > 0 && (
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-semibold text-foreground">
+                                Boarding Point
+                                <span className="ml-1 text-xs font-normal text-muted-foreground">(stop where student boards the bus)</span>
+                            </label>
+                            <button
+                                onClick={() => { setShowBoarding(!showBoarding); setShowRoute(false); setShowVehicle(false) }}
+                                className={cn(
+                                    "flex h-12 items-center justify-between rounded-xl border bg-background px-3.5 transition-colors",
+                                    data.boarding_point ? "border-primary/50" : "border-border"
+                                )}
+                            >
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <MapPin className="h-4 w-4 text-primary shrink-0" />
+                                    <span className={cn("text-xs truncate", data.boarding_point ? "text-foreground font-medium" : "text-muted-foreground")}>
+                                        {data.boarding_point?.name || "Select boarding stop"}
+                                    </span>
+                                </div>
+                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform shrink-0", showBoarding && "rotate-180")} />
+                            </button>
+                            {showBoarding && (
+                                <div className="flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-48 overflow-y-auto">
+                                    {boardingStops.map((stop, i) => (
+                                        <button
+                                            key={i}
+                                            onClick={() => { setData({ ...data, boarding_point: stop }); setShowBoarding(false) }}
+                                            className={cn(
+                                                "flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs text-left transition-colors",
+                                                data.boarding_point?.name === stop.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground"
+                                            )}
+                                        >
+                                            <div className={cn(
+                                                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
+                                                data.boarding_point?.name === stop.name ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                                            )}>
+                                                {i + 1}
+                                            </div>
+                                            {stop.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Organization */}
                     <div className="flex flex-col gap-1.5">

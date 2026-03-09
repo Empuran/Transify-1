@@ -7,7 +7,8 @@ export async function POST(req: NextRequest) {
     try {
         const {
             route_id, organization_id, admin_email, admin_id,
-            routeName, startPoint, endPoint, stops, vehicleId, distance_km
+            routeName, startPoint, endPoint, stops, vehicleId, distance_km,
+            start_lat, start_lng, end_lat, end_lng
         } = await req.json();
 
         if (!route_id || !organization_id) {
@@ -20,7 +21,11 @@ export async function POST(req: NextRequest) {
         const updateData: any = { updated_at: new Date().toISOString() };
         if (routeName !== undefined) updateData.route_name = routeName;
         if (startPoint !== undefined) updateData.start_point = startPoint;
+        if (start_lat !== undefined) updateData.start_lat = start_lat;
+        if (start_lng !== undefined) updateData.start_lng = start_lng;
         if (endPoint !== undefined) updateData.end_point = endPoint;
+        if (end_lat !== undefined) updateData.end_lat = end_lat;
+        if (end_lng !== undefined) updateData.end_lng = end_lng;
         if (stops !== undefined) updateData.stops = stops;
         if (vehicleId !== undefined) updateData.vehicle_id = vehicleId;
         if (distance_km !== undefined) updateData.distance_km = distance_km;

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Bus, ArrowRight, Phone, Mail, CheckCircle2, Key } from "lucide-react"
+import { Bus, ArrowRight, Phone, Mail, CheckCircle2, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
@@ -11,12 +11,12 @@ import { cn } from "@/lib/utils"
 export type UserRole = "admin" | "parent" | "driver"
 
 interface LoginScreenProps {
-  onLogin: (role: UserRole, phone: string) => void
+  onLogin: (role: UserRole, phone: string, name?: string) => void
   assignedRole?: UserRole
   orgCategory?: OrgCategory
 }
 
-type Step = "phone" | "phone-otp" | "email" | "email-otp"
+type Step = "phone" | "phone-otp" | "name" | "email" | "email-otp"
 
 const isAdmin = (role: UserRole) => role === "admin"
 const isCorporate = (cat?: OrgCategory) => cat === "corporate"
@@ -27,6 +27,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
   const [email, setEmail] = useState("")
   const [phoneOtp, setPhoneOtp] = useState("")
   const [emailOtp, setEmailOtp] = useState("")
+  const [parentName, setParentName] = useState("")
 
   const admin = isAdmin(assignedRole)
 
@@ -65,8 +66,27 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
     if (admin) {
       setStep("email")
     } else {
-      onLogin(assignedRole, phone)
+      // Check if we have a stored name for this phone number
+      const storedName = typeof window !== "undefined"
+        ? localStorage.getItem(`transify_parent_name_${phone.replace(/\s+/g, "")}`)
+        : null
+      if (storedName) {
+        // Returning parent - skip name entry
+        onLogin(assignedRole, phone, storedName)
+      } else {
+        // First-time parent - ask for name
+        setStep("name")
+      }
     }
+  }
+
+  const handleSaveName = () => {
+    if (!parentName.trim()) return
+    // Persist name for future logins
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`transify_parent_name_${phone.replace(/\s+/g, "")}`, parentName.trim())
+    }
+    onLogin(assignedRole, phone, parentName.trim())
   }
 
   const handleSendEmailOtp = () => {
@@ -165,7 +185,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
                 disabled={phoneOtp.length < 4}
                 className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                {admin ? "Verify & Continue to Email" : "Verify & Sign In"}
+                {admin ? "Verify & Continue to Email" : "Verify & Continue"}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
               <div className="flex items-center justify-between">
@@ -176,6 +196,36 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
                   Resend OTP
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* ── Step: Name (First-time parents) ── */}
+          {step === "name" && (
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-1">
+                <h2 className="text-xl font-semibold text-foreground">Welcome! 👋</h2>
+                <p className="text-sm text-muted-foreground">What should we call you? This will be your display name.</p>
+              </div>
+              <div className="relative">
+                <User className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="e.g. Priya Menon"
+                  value={parentName}
+                  onChange={(e) => setParentName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveName()}
+                  className="h-12 rounded-xl border-border bg-card pl-10 text-foreground"
+                  autoFocus
+                />
+              </div>
+              <Button
+                onClick={handleSaveName}
+                disabled={!parentName.trim()}
+                className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 disabled:opacity-50"
+              >
+                Continue to Dashboard <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <p className="text-center text-xs text-muted-foreground">Your name is saved locally, so you won't be asked again.</p>
             </div>
           )}
 

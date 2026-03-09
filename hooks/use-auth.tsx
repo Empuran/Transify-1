@@ -49,7 +49,7 @@ interface AuthContextType {
     activeOrgId: string | null
     adminSession: AdminSession | null
     setActiveOrg: (orgId: string) => void
-    loginMock: (role: UserRole, orgCategory?: OrgCategory, phone?: string) => void
+    loginMock: (role: UserRole, orgCategory?: OrgCategory, phone?: string, name?: string) => void
     loginAdmin: (customToken: string, adminData: AdminSession) => Promise<void>
     logoutMock: () => void
 }
@@ -130,11 +130,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }
 
-    const loginMock = (role: UserRole, orgCategory?: OrgCategory, phone?: string) => {
+    const loginMock = (role: UserRole, orgCategory?: OrgCategory, phone?: string, name?: string) => {
+        const displayName = name || (role === "driver" ? "Loading Driver..." : "Parent")
         const mockProfile: UserProfile = {
             id: "test_user_id",
             phone: phone || "+919999999999",
-            globalName: role === "driver" ? "Loading Driver..." : "Test User",
+            globalName: displayName,
             orgCategory: orgCategory || "school",
             roles: { "org_123": role },
             activeOrgId: "org_123",

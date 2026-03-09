@@ -22,9 +22,9 @@ function LoginContent() {
 
     const assignedRole = roleMap[category] || "parent"
 
-    const handleLogin = (role: UserRole, phone: string) => {
+    const handleLogin = (role: UserRole, phone: string, name?: string) => {
         // Update auth state so layout allows access
-        loginMock(role === "parent" ? "guardian" : (role as any), category, phone)
+        loginMock(role === "parent" ? "guardian" : (role as any), category, phone, name)
 
         // Redirect to dashboard with orgCode preserved
         const rolePath = role === "parent" ? "/parent" : `/${role}`

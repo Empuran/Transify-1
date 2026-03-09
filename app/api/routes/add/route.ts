@@ -5,7 +5,11 @@ import { createAuditLog } from "@/lib/audit-logger";
 // POST /api/routes/add — create a new route
 export async function POST(req: NextRequest) {
     try {
-        const { routeName, startPoint, endPoint, stops, vehicleId, organization_id, admin_email, admin_id, distance_km } = await req.json();
+        const { 
+            routeName, startPoint, endPoint, stops, vehicleId, organization_id, 
+            admin_email, admin_id, distance_km,
+            start_lat, start_lng, end_lat, end_lng 
+        } = await req.json();
 
         if (!routeName || !startPoint || !endPoint || !organization_id) {
             return NextResponse.json({ error: "routeName, startPoint, endPoint, and organization_id are required" }, { status: 400 });
@@ -14,8 +18,12 @@ export async function POST(req: NextRequest) {
         const routeDoc = {
             route_name: routeName.trim(),
             start_point: startPoint.trim(),
+            start_lat: start_lat || null,
+            start_lng: start_lng || null,
             end_point: endPoint.trim(),
-            stops: (stops || []).filter((s: string) => s.trim()),
+            end_lat: end_lat || null,
+            end_lng: end_lng || null,
+            stops: (stops || []).filter((s: any) => s.name?.trim()),
             vehicle_id: vehicleId || "Unassigned",
             organization_id,
             status: "active",

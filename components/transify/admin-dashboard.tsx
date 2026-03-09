@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react"
 import {
   Bus, Users, AlertTriangle, Clock, Activity, Plus, ChevronRight,
-  Search, Download, Route, UserPlus, BarChart3, TrendingUp,
+  Search, Download, Route, UserPlus, BarChart3, TrendingUp, Star,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
   Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User,
@@ -231,6 +231,52 @@ export function AdminDashboard() {
   const [dashboardDateEnd, setDashboardDateEnd] = useState<string>("")
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [showDriverRatings, setShowDriverRatings] = useState(false)
+
+  // ── Report Date-Range Filter Modal ───────────────────────────────────────
+  type ReportType = "delay" | "driver" | "route" | null
+  const [reportModal, setReportModal] = useState<ReportType>(null)
+  const today = new Date().toISOString().split("T")[0]
+  const defaultFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+  const [reportFrom, setReportFrom] = useState(defaultFrom)
+  const [reportTo, setReportTo] = useState(today)
+  const [reportPreset, setReportPreset] = useState<number | null>(30)
+
+  const filterByDate = (items: any[], field = "timestamp") => {
+    const from = reportFrom ? new Date(reportFrom).getTime() : 0
+    const to = reportTo ? new Date(reportTo + "T23:59:59").getTime() : Infinity
+    return items.filter((item: any) => {
+      const t = item[field] ? new Date(item[field]).getTime() : 0
+      return t >= from && t <= to
+    })
+  }
+
+  const doExportReport = (type: ReportType) => {
+    if (!type) return
+    if (type === "delay") {
+      const rows = filterByDate(dashboardStats.delays)
+      const csv = "Time,Driver,Vehicle,Message\n" + rows.map((d: any) => {
+        const time = `"${new Date(d.timestamp).toLocaleString().replace(/"/g, '""')}"`
+        const driver = `"${(d.metadata?.driver_name || "—").replace(/"/g, '""')}"`
+        const vehicle = `"${(d.metadata?.vehicle_id || "—").replace(/"/g, '""')}"`
+        const msg = `"${(d.message || "—").replace(/"/g, '""')}"`
+        return `${time},${driver},${vehicle},${msg}`
+      }).join("\n")
+      downloadCSV(csv, `delay_analytics_${reportFrom}_to_${reportTo}.csv`)
+    } else if (type === "driver") {
+      const rows = filterByDate(driversData, "created_at")
+      const csv = "Driver,License,Rating,Status\n" + rows.map((d: any) =>
+        `${d.name},${d.license_type},${d.avg_rating || 0},${d.status}`
+      ).join("\n")
+      downloadCSV(csv, `driver_performance_${reportFrom}_to_${reportTo}.csv`)
+    } else if (type === "route") {
+      const csv = "Route,Vehicle,Stops,Distance (km)\n" + routesData.map((r: any) =>
+        `${r.route_name},${r.vehicle_id},${(r.stops || []).length},${r.distance_km || 0}`
+      ).join("\n")
+      downloadCSV(csv, `route_efficiency_${reportFrom}_to_${reportTo}.csv`)
+    }
+    setReportModal(null)
+  }
 
   // ── Determine org type from admin session or profile ──
   const isCorporate = adminSession?.organization_category === "corporate" || (profile as any)?.orgCategory === "corporate"
@@ -246,6 +292,19 @@ export function AdminDashboard() {
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 3000) }
   const handleLogout = () => { logoutMock(); router.push("/category") }
+
+  const downloadCSV = (csv: string, filename: string) => {
+    if (typeof window === "undefined") return
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.setAttribute('hidden', '')
+    a.setAttribute('href', url)
+    a.setAttribute('download', filename)
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
 
   // ── Member Filters ──────────────────────────────────────────────────────
   const [memberSearch, setMemberSearch] = useState("")
@@ -1276,40 +1335,191 @@ export function AdminDashboard() {
             <div className="flex flex-col gap-6">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">Reports & Analytics</h1>
-                <Button variant="outline" className="gap-2 rounded-xl"><Download className="h-4 w-4" /> Export All</Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    className="gap-2 rounded-xl"
+                    onClick={() => {
+                      const csv = "Date,Action,Admin,Details\n" + 
+                        dashboardStats.delays.map((l: any) => `${new Date(l.timestamp).toLocaleString()},Delay,${l.driver_name},${l.message}`).join("\n");
+                      const blob = new Blob([csv], { type: 'text/csv' });
+                      const url = window.URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.setAttribute('hidden', '');
+                      a.setAttribute('href', url);
+                      a.setAttribute('download', 'delay_analytics.csv');
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }}
+                  >
+                    <Download className="h-4 w-4" /> Export All
+                  </Button>
+                </div>
               </div>
+              
               <div className="grid gap-4 sm:grid-cols-3">
-                {[
-                  { v: "100%", l: "On-Time Rate", sub: "Based on active fleet", color: "text-success" },
-                  { v: "4.8", l: "Avg Driver Score", sub: "Out of 5.0", color: "text-warning" },
-                  { v: vehiclesData.filter((v: any) => v.status === "on-time").length.toString(), l: "Trips Today", sub: `Across ${vehiclesData.length} vehicles`, color: "text-primary" },
-                ].map((s, i) => (
-                  <div key={i} className="rounded-2xl border border-border bg-card p-5 shadow-sm text-center">
-                    <p className={cn("text-4xl font-black", s.color)}>{s.v}</p>
-                    <p className="text-sm font-semibold text-foreground mt-1">{s.l}</p>
-                    <p className="text-xs text-muted-foreground">{s.sub}</p>
-                  </div>
-                ))}
+                {(() => {
+                  const totalVehicles = vehiclesData.length || 1;
+                  // Count vehicles that are currently active/on-duty as "on-time" proxies,
+                  // since vehicles don't separate on-time from delayed unless a trip is in progress.
+                  const ACTIVE_STATUSES = ["on-time", "on_duty", "on-duty", "active", "in_transit", "in-transit", "moving"]
+                  const onTimeVehicles = vehiclesData.filter((v: any) => ACTIVE_STATUSES.includes((v.status || "").toLowerCase())).length;
+                  const onTimeRate = Math.round((onTimeVehicles / totalVehicles) * 100);
+                  
+                  // Avg rating: try multiple field names in case of different storage schemas
+                  const driversWithRatings = driversData.filter((d: any) => {
+                    const r = d.avg_rating ?? d.rating ?? (d.rating_count > 0 ? (d.total_rating / d.rating_count) : undefined)
+                    return r !== undefined && r > 0
+                  });
+                  const avgScore = driversWithRatings.length > 0 
+                    ? (driversWithRatings.reduce((acc: number, d: any) => {
+                        const r = d.avg_rating ?? d.rating ?? (d.rating_count > 0 ? d.total_rating / d.rating_count : 0)
+                        return acc + r
+                      }, 0) / driversWithRatings.length).toFixed(1)
+                    : "N/A";
+
+                  return [
+                    { v: `${onTimeRate}%`, l: "On-Time Rate", sub: `Based on ${onTimeVehicles}/${vehiclesData.length} vehicles`, color: "text-success" },
+                    { 
+                      v: avgScore, 
+                      l: "Avg Driver Score", 
+                      sub: "Click to view ratings", 
+                      color: "text-warning", 
+                      clickable: true,
+                      onClick: () => setShowDriverRatings(true)
+                    },
+                    { v: dashboardStats.tripStarts.length.toString(), l: "Trips Today", sub: `Showing for ${dashboardDate}`, color: "text-primary" },
+                  ].map((s, i) => (
+                    <div 
+                      key={i} 
+                      className={cn(
+                        "rounded-2xl border border-border bg-card p-5 shadow-sm text-center transition-all",
+                        s.clickable && "cursor-pointer hover:border-primary/50 hover:bg-primary/5 active:scale-95"
+                      )}
+                      onClick={s.onClick}
+                    >
+                      <p className={cn("text-4xl font-black", s.color)}>{s.v}</p>
+                      <p className="text-sm font-semibold text-foreground mt-1">{s.l}</p>
+                      <p className="text-xs text-muted-foreground">{s.sub}</p>
+                    </div>
+                  ));
+                })()}
               </div>
+
+              {/* ── DATE RANGE FILTER TILES ── */}
               <div className="grid gap-4 lg:grid-cols-3">
                 {[
-                  { icon: Clock, label: "Delay Analytics", desc: "Patterns and root causes", color: "text-warning", bg: "bg-warning/10" },
-                  { icon: TrendingUp, label: "Driver Performance", desc: "Safety and punctuality scores", color: "text-primary", bg: "bg-primary/10" },
-                  { icon: Route, label: "Route Efficiency", desc: "Time & distance optimization", color: "text-success", bg: "bg-success/10" },
-                ].map((r, i) => {
+                  { key: "delay" as const, icon: Clock, label: "Delay Analytics", desc: "Patterns and root causes", color: "text-warning", bg: "bg-warning/10" },
+                  { key: "driver" as const, icon: TrendingUp, label: "Driver Performance", desc: "Safety and punctuality scores", color: "text-primary", bg: "bg-primary/10" },
+                  { key: "route" as const, icon: Route, label: "Route Efficiency", desc: "Time & distance optimization", color: "text-success", bg: "bg-success/10" },
+                ].map((r) => {
                   const Icon = r.icon; return (
-                    <button key={i} className="flex items-center gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md active:scale-[0.98] text-left">
+                    <button
+                      key={r.key}
+                      onClick={() => { setReportFrom(defaultFrom); setReportTo(today); setReportModal(r.key) }}
+                      className="flex items-center gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md active:scale-[0.98] text-left"
+                    >
                       <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-xl", r.bg)}>
                         <Icon className={cn("h-6 w-6", r.color)} />
                       </div>
-                      <div className="flex-1"><p className="text-sm font-bold text-foreground">{r.label}</p><p className="text-xs text-muted-foreground">{r.desc}</p></div>
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-foreground">{r.label}</p>
+                        <p className="text-xs text-muted-foreground">{r.desc}</p>
+                      </div>
                       <Download className="h-4 w-4 text-muted-foreground shrink-0" />
                     </button>
                   )
                 })}
               </div>
+
+              {/* ── DATE RANGE MODAL ── */}
+              {reportModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                  <div className="w-full max-w-sm rounded-2xl border border-border bg-card shadow-2xl p-6 flex flex-col gap-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-lg font-bold text-foreground">
+                          {reportModal === "delay" ? "Delay Analytics" : reportModal === "driver" ? "Driver Performance" : "Route Efficiency"}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">Select a date range to export</p>
+                      </div>
+                      <button onClick={() => setReportModal(null)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">From</label>
+                        <input
+                          type="date"
+                          value={reportFrom}
+                          max={reportTo || today}
+                          onChange={e => { setReportFrom(e.target.value); setReportPreset(null) }}
+                          className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">To</label>
+                        <input
+                          type="date"
+                          value={reportTo}
+                          min={reportFrom}
+                          max={today}
+                          onChange={e => { setReportTo(e.target.value); setReportPreset(null) }}
+                          className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick presets */}
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { label: "Last 7 days", days: 7 },
+                        { label: "Last 30 days", days: 30 },
+                        { label: "Last 90 days", days: 90 },
+                      ].map(({ label, days }) => (
+                        <button
+                          key={label}
+                          onClick={() => {
+                            const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+                            setReportFrom(from)
+                            setReportTo(today)
+                            setReportPreset(days)
+                          }}
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs font-semibold transition-all",
+                            reportPreset === days
+                              ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                              : "border-border text-muted-foreground hover:border-primary hover:text-primary"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-3">
+                      <Button variant="outline" onClick={() => setReportModal(null)} className="flex-1 rounded-xl h-11">
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={() => doExportReport(reportModal)}
+                        disabled={!reportFrom || !reportTo}
+                        className="flex-1 rounded-xl h-11 gap-2 bg-primary"
+                      >
+                        <Download className="h-4 w-4" />
+                        Export CSV
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Settings etc... */}
 
           {/* SETTINGS */}
           {section === "settings" && (
@@ -1452,6 +1662,55 @@ export function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Driver Ratings Detail Modal */}
+      {showDriverRatings && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-sm"
+          onClick={e => e.target === e.currentTarget && setShowDriverRatings(false)}>
+          <div className="w-full max-w-2xl rounded-3xl bg-card shadow-2xl flex flex-col max-h-[80vh] animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-border px-8 py-6">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Driver Performance Ratings</h2>
+                <p className="text-sm text-muted-foreground">Detailed scores for all registered drivers</p>
+              </div>
+              <button onClick={() => setShowDriverRatings(false)}
+                className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-muted transition-colors">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="grid gap-4">
+                {driversData.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between rounded-2xl border border-border bg-muted/20 p-4 hover:bg-muted/40 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
+                        <User className="h-6 w-6 text-primary" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-foreground">{d.name}</p>
+                        <p className="text-xs text-muted-foreground">{d.phone || "No phone"}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1">
+                        <Star className="h-4 w-4 fill-warning text-warning" />
+                        <span className="text-lg font-bold text-foreground">{(d.avg_rating || 0).toFixed(1)}</span>
+                      </div>
+                      <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+                        {(d.total_ratings || 0)} Reviews
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-border p-6 bg-muted/10 rounded-b-3xl">
+              <Button onClick={() => setShowDriverRatings(false)} className="w-full h-12 rounded-xl">Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
