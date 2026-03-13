@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getAuth, signInWithCustomToken, signInAnonymously } from "firebase/auth";
+import { getAuth, signInWithCustomToken, signInAnonymously, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -19,4 +19,4 @@ const app = firebaseConfig.apiKey ? (getApps().length === 0 ? initializeApp(fire
 const auth = app ? getAuth(app) : ({} as any);
 const db = app ? getFirestore(app, "transifydb") : ({} as any);
 
-export { app, auth, db, signInWithCustomToken, signInAnonymously };
+export { app, auth, db, signInWithCustomToken, signInAnonymously, RecaptchaVerifier, signInWithPhoneNumber };

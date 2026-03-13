@@ -1,0 +1,11 @@
+Listing all drivers from both (default) and transifydb
+
+--- Database: (default) ---
+Error: 5 NOT_FOUND: 
+
+--- Database: transifydb ---
+Documents found: 3
+ID: KeaeMU8rMdOKrYqMRemL | Name: Abishek Rajan | Phone: "+91 9876543210"
+ID: LMwNGfcSTGVB656OOwx0 | Name: William V Shelly | Phone: "1234567890"
+ID: wVdLRZWZOUPFG5dWpLAp | Name: Nidhin George | Phone: "+91 8289871896"
+

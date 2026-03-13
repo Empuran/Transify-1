@@ -6,7 +6,7 @@ import {
   Search, Download, Route, UserPlus, BarChart3, TrendingUp, Star,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User,
+  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User, ArrowLeft,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -232,6 +232,9 @@ export function AdminDashboard() {
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showDriverRatings, setShowDriverRatings] = useState(false)
+  const [selectedDriverForReviews, setSelectedDriverForReviews] = useState<any>(null)
+  const [driverReviews, setDriverReviews] = useState<any[]>([])
+  const [loadingReviews, setLoadingReviews] = useState(false)
 
   // ── Report Date-Range Filter Modal ───────────────────────────────────────
   type ReportType = "delay" | "driver" | "route" | null
@@ -371,6 +374,33 @@ export function AdminDashboard() {
     const unsub = fetchDrivers()
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchDrivers])
+
+  const fetchDriverReviews = useCallback((driverId: string) => {
+    setLoadingReviews(true)
+    const q = query(
+      collection(db, "ratings"),
+      where("driver_id", "==", driverId)
+    )
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const reviews = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      reviews.sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+      setDriverReviews(reviews)
+      setLoadingReviews(false)
+    }, (err) => {
+      console.error("Firestore reviews listener error:", err)
+      setLoadingReviews(false)
+    })
+    return unsubscribe
+  }, [])
+
+  useEffect(() => {
+    if (selectedDriverForReviews) {
+      const unsub = fetchDriverReviews(selectedDriverForReviews.id)
+      return () => unsub()
+    } else {
+      setDriverReviews([])
+    }
+  }, [selectedDriverForReviews, fetchDriverReviews])
 
   const filteredDrivers = useMemo(() => driversData.filter((d: any) =>
     (d.name?.toLowerCase().includes(driverSearch.toLowerCase()) || d.phone?.includes(driverSearch)) &&
@@ -1669,43 +1699,99 @@ export function AdminDashboard() {
           onClick={e => e.target === e.currentTarget && setShowDriverRatings(false)}>
           <div className="w-full max-w-2xl rounded-3xl bg-card shadow-2xl flex flex-col max-h-[80vh] animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between border-b border-border px-8 py-6">
-              <div>
-                <h2 className="text-xl font-bold text-foreground">Driver Performance Ratings</h2>
-                <p className="text-sm text-muted-foreground">Detailed scores for all registered drivers</p>
-              </div>
-              <button onClick={() => setShowDriverRatings(false)}
+              {selectedDriverForReviews ? (
+                <div className="flex items-center gap-4">
+                  <button onClick={() => setSelectedDriverForReviews(null)} className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-muted transition-colors">
+                    <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-foreground">{selectedDriverForReviews.name}</h2>
+                    <p className="text-sm text-muted-foreground">Detailed reviews and comments</p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">Driver Performance Ratings</h2>
+                  <p className="text-sm text-muted-foreground">Detailed scores for all registered drivers</p>
+                </div>
+              )}
+              <button onClick={() => { setShowDriverRatings(false); setSelectedDriverForReviews(null) }}
                 className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-muted transition-colors">
                 <X className="h-5 w-5" />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
-              <div className="grid gap-4">
-                {driversData.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between rounded-2xl border border-border bg-muted/20 p-4 hover:bg-muted/40 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-                        <User className="h-6 w-6 text-primary" />
-                      </div>
-                      <div>
-                        <p className="font-bold text-foreground">{d.name}</p>
-                        <p className="text-xs text-muted-foreground">{d.phone || "No phone"}</p>
-                      </div>
+              {selectedDriverForReviews ? (
+                <div className="flex flex-col gap-4">
+                  {loadingReviews ? (
+                    <div className="flex justify-center py-12">
+                      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
                     </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <div className="flex items-center gap-1">
-                        <Star className="h-4 w-4 fill-warning text-warning" />
-                        <span className="text-lg font-bold text-foreground">{(d.avg_rating || 0).toFixed(1)}</span>
-                      </div>
-                      <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
-                        {(d.total_ratings || 0)} Reviews
-                      </span>
+                  ) : driverReviews.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+                      <Star className="h-10 w-10 opacity-20" />
+                      <p className="text-sm">No reviews yet for this driver</p>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ) : (
+                    driverReviews.map((r, i) => (
+                      <div key={r.id || i} className="rounded-2xl border border-border bg-muted/20 p-5 flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-warning">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <Star key={star} className={cn("h-4 w-4", star <= (r.rating || 0) ? "fill-current" : "opacity-20")} />
+                            ))}
+                          </div>
+                          <span className="text-[10px] text-muted-foreground font-medium">
+                            {r.timestamp ? new Date(r.timestamp?.seconds * 1000 || r.timestamp).toLocaleDateString("en-IN", { dateStyle: "medium" }) : ""}
+                          </span>
+                        </div>
+                        {r.comment && <p className="text-sm text-foreground italic">"{r.comment}"</p>}
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                            {(r.student_name || "P")[0]}
+                          </div>
+                          <p className="text-[11px] font-semibold text-muted-foreground">Parent of {r.student_name || "Student"}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {driversData.map((d) => (
+                    <button 
+                      key={d.id} 
+                      onClick={() => setSelectedDriverForReviews(d)}
+                      className="flex items-center justify-between rounded-2xl border border-border bg-muted/20 p-4 hover:bg-muted/40 transition-colors text-left group"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                          <User className="h-6 w-6 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-foreground">{d.name}</p>
+                          <p className="text-xs text-muted-foreground">{d.phone || "No phone"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-1">
+                            <Star className="h-4 w-4 fill-warning text-warning" />
+                            <span className="text-lg font-bold text-foreground">{(d.avg_rating || 0).toFixed(1)}</span>
+                          </div>
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+                            {(d.total_ratings || 0)} Reviews
+                          </span>
+                        </div>
+                        <ChevronRight className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="border-t border-border p-6 bg-muted/10 rounded-b-3xl">
-              <Button onClick={() => setShowDriverRatings(false)} className="w-full h-12 rounded-xl">Close</Button>
+              <Button onClick={() => { setShowDriverRatings(false); setSelectedDriverForReviews(null) }} className="w-full h-12 rounded-xl">Close</Button>
             </div>
           </div>
         </div>

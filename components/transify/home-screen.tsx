@@ -32,6 +32,7 @@ interface ChildData {
   school: string
   vehicle: string
   driver: string
+  driverId?: string
   route: string
   routeDocId?: string        // Firestore document ID of the assigned route
   rawVehicleId?: string      // Raw vehicle doc ID for the live listener
@@ -51,6 +52,7 @@ const resolveStudentData = async (rawStudents: Array<{
     rawStudents.map(async (s) => {
       let vehiclePlate = s.vehicleId || "Not Assigned"
       let driverName = "Not Assigned"
+      let driverId = ""
       let routeName = s.rawRoute
       let routeDocId: string | undefined = s.routeId
 
@@ -67,6 +69,7 @@ const resolveStudentData = async (rawStudents: Array<{
                   if (vMatch) {
                       vehiclePlate = vMatch.plate_number || vMatch.registration_number || s.vehicleId
                       driverName = vMatch.driver_name || vMatch.assigned_driver || "Not Assigned"
+                      driverId = vMatch.driver_id || ""
                   }
               }
 
@@ -88,6 +91,7 @@ const resolveStudentData = async (rawStudents: Array<{
         school: s.school,
         vehicle: vehiclePlate,
         driver: driverName,
+        driverId: driverId,
         route: routeName,
         routeDocId,
         rawVehicleId: s.vehicleId,
@@ -517,6 +521,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       const ratingData = {
         student_id: profile?.id || "unknown",
         student_name: userName,
+        driver_id: selectedChild?.driverId || "Unknown",
         driver_name: selectedChild?.driver || "Unknown",
         vehicle_id: selectedChild?.vehicle || "Unknown",
         rating: rating,
@@ -528,10 +533,15 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       await addDoc(collection(db, "ratings"), ratingData)
       
       // 3. Update driver's overall rating using a transaction
-      // For demo, we use a slug of the driver name as the ID if driverId isn't present
-      const driverName = selectedChild?.driver || ""
-      const driverId = (selectedChild as any)?.driverId || driverName.toLowerCase().replace(/\s/g, "_")
-      if (!driverId) return
+      const driverId = selectedChild?.driverId
+      if (!driverId) {
+          console.warn("No driver ID found for rating update")
+          setShowRatingModal(false)
+          setRating(0)
+          setComment("")
+          alert("Thank you for your feedback!")
+          return
+      }
       
       const driverRef = doc(db, "drivers", driverId)
       

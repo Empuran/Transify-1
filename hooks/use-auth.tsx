@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react"
 import { auth, db, signInWithCustomToken, signInAnonymously } from "@/lib/firebase"
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth"
-import { doc, getDoc } from "firebase/firestore"
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore"
 import type { AdminRole } from "@/lib/rbac"
 
 export type UserRole = "admin" | "driver" | "guardian"
@@ -218,6 +218,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }
 
                 try {
+                    // 1. Try fetching from generic users collection
                     const docRef = doc(db, "users", firebaseUser.uid)
                     const docSnap = await getDoc(docRef)
 
@@ -225,6 +226,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         const data = docSnap.data() as UserProfile
                         setProfile(data)
                         setActiveOrgId(data.activeOrgId || Object.keys(data.roles)[0] || null)
+                    } else if (firebaseUser.phoneNumber) {
+                        // 2. If not found and has phone, check drivers collection
+                        console.log("[Auth] Checking phone in drivers collection:", firebaseUser.phoneNumber);
+                        
+                        // Handle multiple phone formats for lookup (including spaces found in DB)
+                        const rawPhone = firebaseUser.phoneNumber;
+                        const digits = rawPhone.replace(/\D/g, "").slice(-10);
+                        const phoneVariants = [
+                            rawPhone, 
+                            digits, 
+                            `+91${digits}`,
+                            `+91 ${digits}`, // Format with space: +91 8289871896
+                            `+91 ${digits.slice(0, 5)} ${digits.slice(5)}` // Format with multiple spaces
+                        ];
+
+                        console.log("[Auth] Searching with variants:", phoneVariants);
+                        const driversRef = collection(db, "drivers");
+                        const q = query(driversRef, where("phone", "in", phoneVariants));
+                        const driverSnap = await getDocs(q);
+
+                        if (!driverSnap.empty) {
+                            const driverData = driverSnap.docs[0].data();
+                            console.log("[Auth] Found driver profile:", driverData.name);
+                            
+                            const driverProfile: UserProfile = {
+                                id: firebaseUser.uid,
+                                phone: rawPhone,
+                                globalName: driverData.name,
+                                roles: { [driverData.organization_id]: "driver" },
+                                activeOrgId: driverData.organization_id,
+                            };
+                            setProfile(driverProfile);
+                            setActiveOrgId(driverData.organization_id);
+                        } else {
+                            console.warn("[Auth] No driver found for these variants.");
+                        }
                     }
                 } catch (error) {
                     console.error("Error fetching profile:", error)

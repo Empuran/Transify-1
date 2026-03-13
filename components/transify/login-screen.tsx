@@ -1,12 +1,14 @@
 "use client"
 
-import { useState } from "react"
-import { Bus, ArrowRight, Phone, Mail, CheckCircle2, User } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Bus, ArrowRight, Phone, Mail, CheckCircle2, User, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
 import { OrgCategory } from "./category-selection"
 import { cn } from "@/lib/utils"
+import { auth, RecaptchaVerifier, signInWithPhoneNumber } from "@/lib/firebase"
+import { toast } from "sonner"
 
 export type UserRole = "admin" | "parent" | "driver"
 
@@ -28,6 +30,8 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
   const [phoneOtp, setPhoneOtp] = useState("")
   const [emailOtp, setEmailOtp] = useState("")
   const [parentName, setParentName] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [confirmationResult, setConfirmationResult] = useState<any>(null)
 
   const admin = isAdmin(assignedRole)
 
@@ -57,17 +61,102 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
 
   const currentStepIdx = steps.findIndex(s => s.id === step)
 
-  const handleSendPhoneOtp = () => {
+  useEffect(() => {
+    if (assignedRole === "driver" && typeof window !== "undefined") {
+      // Initialize invisible recaptcha for drivers
+      if (!(window as any).recaptchaVerifier) {
+        (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          'size': 'invisible',
+          'callback': () => {
+            console.log("Recaptcha verified")
+          }
+        });
+      }
+    }
+  }, [assignedRole]);
+
+  const handleSendPhoneOtp = async () => {
     if (!phone.trim()) return
-    setStep("phone-otp")
+    setLoading(true)
+    console.log("[OTP] Starting OTP process for:", phone);
+
+    const timeoutId = setTimeout(() => {
+      if (loading) {
+        setLoading(false);
+        toast.error("Process is taking longer than expected. Please check your internet or Firebase authorized domains.");
+      }
+    }, 15000);
+
+    try {
+      if (assignedRole === "driver") {
+        console.log("[OTP] Step 1: Checking registration...");
+        const res = await fetch("/api/drivers/auth/check-registration", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone }),
+        });
+
+        console.log("[OTP] Step 1 Finished: Registration check status:", res.status);
+        const data = await res.json();
+        console.log("[OTP] Step 1 Data:", data);
+
+        if (!res.ok) {
+          toast.error(data.error || "Phone number not registered");
+          setLoading(false);
+          clearTimeout(timeoutId);
+          return;
+        }
+
+        console.log("[OTP] Step 2: Formatting phone for Firebase...");
+        let phoneForFirebase = phone.trim();
+        if (!phoneForFirebase.startsWith("+")) {
+          const digits = phoneForFirebase.replace(/\D/g, "");
+          phoneForFirebase = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+        }
+        // Ensure NO spaces for Firebase
+        phoneForFirebase = phoneForFirebase.replace(/\s/g, "");
+        console.log("[OTP] Step 2 Finished: Formatted as:", phoneForFirebase);
+
+        console.log("[OTP] Step 3: Getting Recaptcha verifier...");
+        const appVerifier = (window as any).recaptchaVerifier;
+        if (!appVerifier) {
+          console.error("[OTP] RECAPTCHA MISSING!");
+          throw new Error("Recaptcha verifier not initialized. Please refresh the page.");
+        }
+        
+        console.log("[OTP] Step 4: Calling signInWithPhoneNumber...");
+        const confirmation = await signInWithPhoneNumber(auth, phoneForFirebase, appVerifier);
+        console.log("[OTP] Step 4 Finished: Firebase confirmation obtained");
+        setConfirmationResult(confirmation);
+        toast.success("Verification code sent to your phone");
+      }
+
+      console.log("[OTP] Final Step: Setting UI to phone-otp...");
+      setStep("phone-otp")
+    } catch (error: any) {
+      console.error("[OTP] Error occurred:", error);
+      toast.error(error.message || "Failed to send OTP. Check console for details.");
+    } finally {
+      clearTimeout(timeoutId);
+      setLoading(false)
+    }
   }
 
-  const handleVerifyPhoneOtp = () => {
+  const handleVerifyPhoneOtp = async () => {
     if (admin) {
       setStep("email")
     } else if (assignedRole === "driver") {
-      // Drivers are pre-registered by admin — name is fetched from Firestore in driver-dashboard
-      onLogin(assignedRole, phone)
+      if (!confirmationResult) return;
+      setLoading(true);
+      try {
+        await confirmationResult.confirm(phoneOtp);
+        onLogin(assignedRole, phone);
+      } catch (error: any) {
+        console.error("OTP verification failed:", error);
+        toast.error("Invalid verification code. Please try again.");
+      } finally {
+        setLoading(false);
+      }
     } else {
       // Check if we have a stored name for this phone number (parents)
       const storedName = typeof window !== "undefined"
@@ -156,13 +245,16 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
               </div>
               <Button
                 onClick={handleSendPhoneOtp}
-                disabled={!phone.trim()}
+                disabled={!phone.trim() || loading}
                 className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                Send OTP <ArrowRight className="ml-2 h-4 w-4" />
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Send OTP <ArrowRight className="ml-2 h-4 w-4" /></>}
               </Button>
             </div>
           )}
+
+          {/* Recaptcha container always present but hidden when not needed */}
+          <div id="recaptcha-container" className={cn(step !== "phone" && "hidden")}></div>
 
           {/* ── Step: Phone OTP ── */}
           {step === "phone-otp" && (
@@ -185,11 +277,17 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
               </div>
               <Button
                 onClick={handleVerifyPhoneOtp}
-                disabled={phoneOtp.length < 4}
+                disabled={phoneOtp.length < 6 || loading}
                 className="h-12 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
-                {admin ? "Verify & Continue to Email" : "Verify & Continue"}
-                <ArrowRight className="ml-2 h-4 w-4" />
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    {admin ? "Verify & Continue to Email" : "Verify & Continue"}
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </>
+                )}
               </Button>
               <div className="flex items-center justify-between">
                 <button onClick={() => setStep("phone")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">

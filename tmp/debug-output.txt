@@ -1,0 +1,17 @@
+--- DRIVERS ---
+ID: KeaeMU8rMdOKrYqMRemL, Name: Abishek Rajan, Avg: undefined, total: undefined
+ID: LMwNGfcSTGVB656OOwx0, Name: William V Shelly, Avg: undefined, total: undefined
+ID: wVdLRZWZOUPFG5dWpLAp, Name: Nidhin George, Avg: undefined, total: undefined
+
+--- VEHICLES ---
+DocID: 31hRTKM37kXh1ZLp65Rh, Plate: KL-07-WILL-26, DriverName: William V Shelly, DriverID: LMwNGfcSTGVB656OOwx0
+DocID: Axb0oPoUzRMww85omp9y, Plate: KL-07-123, DriverName: Abishek Rajan, DriverID: KeaeMU8rMdOKrYqMRemL
+DocID: rSUeIZXr4QlFim1evVDV, Plate: KL-TCRKOC-2619, DriverName: Nidhin George, DriverID: wVdLRZWZOUPFG5dWpLAp
+
+--- RATINGS (Newest 10) ---
+DocID: 1JShwVCQlKDdYLzcPyEL, Rating: 3, Driver: Nidhin George, DriverID: MISSING, Vehicle: KL-TCRKOC-2619, Time: 2026-03-13T14:27:02.295Z
+DocID: F0dsEnBE6zUwLyj6KsQ5, Rating: 5, Driver: Not Assigned, DriverID: MISSING, Vehicle: rSUeIZXr4QlFim1evVDV, Time: 2026-03-13T11:50:28.801Z
+DocID: FeAfKx8ltnCwsQK2gyWP, Rating: 5, Driver: Nidhin George, DriverID: MISSING, Vehicle: KL-TCRKOC-2619, Time: 2026-03-09T21:04:02.372Z
+DocID: T0KhJtB42TRB6YTp5KMr, Rating: 4, Driver: Nidhin George, DriverID: MISSING, Vehicle: KL-TCRKOC-2619, Time: 2026-03-09T21:02:48.673Z
+DocID: Gucmfg8U5otcgLogUwmj, Rating: 4, Driver: Nidhin George, DriverID: MISSING, Vehicle: KL-TCRKOC-2619, Time: 2026-03-09T20:36:35.747Z
+DocID: i5TQy025Z8diNOKhjpOv, Rating: 3, Driver: Rajesh Kumar, DriverID: MISSING, Vehicle: KA-01-AB-1234, Time: 2026-03-09T18:16:24.625Z

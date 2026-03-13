@@ -125,6 +125,12 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const [resolvedOrgId, setResolvedOrgId] = useState<string>("")
   const [isResolvingOrg, setIsResolvingOrg] = useState(false)
   const resolveOrg = useCallback(async () => {
+    // Priority 1: Use activeOrgId from profile if available
+    if (profile?.activeOrgId) {
+      setResolvedOrgId(profile.activeOrgId)
+      return
+    }
+
     if (!orgCode) return
     setIsResolvingOrg(true)
     try {
@@ -134,7 +140,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       setResolvedOrgId(foundId || orgCode)
     } catch { setResolvedOrgId(orgCode) }
     finally { setIsResolvingOrg(false) }
-  }, [orgCode])
+  }, [orgCode, profile?.activeOrgId])
   useEffect(() => { resolveOrg() }, [resolveOrg])
 
   const [tripState, setTripState] = useState<TripState>("not-started")
@@ -381,7 +387,10 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   // 1. Fetch driver info
   const fetchDriverInfo = useCallback(async () => {
     if (!resolvedOrgId || !profile?.phone) { 
-      if (resolvedOrgId || profile?.phone) setIsVerifying(false); 
+      // If we don't have enough info but the profile definitely doesn't exist or org is missing, stop verifying
+      if (profile === null || (resolvedOrgId === "" && !profile?.activeOrgId)) {
+        // Only set verifying to false if we are not expecting a fetch
+      }
       return 
     }
     

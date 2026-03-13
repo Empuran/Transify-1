@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     try {
         const {
             vehicle_id, organization_id, admin_email, admin_id,
-            plateNumber, type, capacity, driverName, fuelType
+            plateNumber, type, capacity, driverName, driverId, fuelType
         } = await req.json();
 
         if (!vehicle_id || !organization_id) {
@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
         if (type !== undefined) updateData.type = type;
         if (capacity !== undefined) updateData.capacity = capacity;
         if (driverName !== undefined) updateData.driver_name = driverName;
+        if (driverId !== undefined) updateData.driver_id = driverId;
         if (fuelType !== undefined) updateData.fuel_type = fuelType;
 
         await vehicleRef.update(updateData);

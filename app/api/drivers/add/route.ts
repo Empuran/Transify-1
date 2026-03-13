@@ -28,6 +28,23 @@ export async function POST(req: NextRequest) {
 
         const docRef = await adminDb.collection("drivers").add(driverDoc);
 
+        // ── Link to Vehicle if assigned ──────────────────────────────────────
+        if (vehicleId && vehicleId !== "Unassigned") {
+            const vehicleQuery = await adminDb.collection("vehicles")
+                .where("organization_id", "==", organization_id)
+                .where("plate_number", "==", vehicleId)
+                .limit(1)
+                .get();
+
+            if (!vehicleQuery.empty) {
+                const vehicleDocRef = vehicleQuery.docs[0].ref;
+                await vehicleDocRef.update({
+                    driver_id: docRef.id,
+                    driver_name: driverDoc.name
+                });
+            }
+        }
+
         await createAuditLog({
             action: "add",
             entity_type: "driver",
@@ -41,7 +58,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
             success: true,
             driver_id: docRef.id,
-            message: `Driver ${name} added successfully`,
+            message: `Driver ${name} added successfully and linked to vehicle`,
         });
     } catch (error: any) {
         console.error("Add driver error:", error);

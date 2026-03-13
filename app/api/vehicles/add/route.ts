@@ -5,7 +5,7 @@ import { createAuditLog } from "@/lib/audit-logger";
 // POST /api/vehicles/add — register a new vehicle
 export async function POST(req: NextRequest) {
     try {
-        const { plateNumber, type, capacity, driverName, fuelType, organization_id, admin_email, admin_id } = await req.json();
+        const { plateNumber, type, capacity, driverName, driverId, fuelType, organization_id, admin_email, admin_id } = await req.json();
 
         if (!plateNumber || !type || !organization_id) {
             return NextResponse.json({ error: "plateNumber, type, and organization_id are required" }, { status: 400 });
@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
             type: type,
             capacity: capacity || "0",
             driver_name: driverName || "Unassigned",
+            driver_id: driverId || "",
             fuel_type: fuelType || "",
             organization_id,
             status: "off-duty",

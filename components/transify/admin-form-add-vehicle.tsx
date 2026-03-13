@@ -24,18 +24,19 @@ const vehicleTypes = ["School Bus", "Mini Bus", "Van", "Car", "Shuttle"]
 const fuelTypes = ["Diesel", "Petrol", "CNG", "Electric", "Hybrid"]
 
 export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormProps) {
-    const [data, setData] = useState<VehicleData>({
+    const [data, setData] = useState<VehicleData & { driverId?: string }>({
         plateNumber: initialData?.plate_number || initialData?.plateNumber || "",
         type: initialData?.type || "",
         capacity: initialData?.capacity || "",
         driverName: initialData?.driver_name || initialData?.driverName || "",
         fuelType: initialData?.fuel_type || initialData?.fuelType || "",
+        driverId: initialData?.driver_id || "",
     })
     const [showType, setShowType] = useState(false)
     const [showFuel, setShowFuel] = useState(false)
     const [showDriver, setShowDriver] = useState(false)
     const [saved, setSaved] = useState(false)
-    const [driverOptions, setDriverOptions] = useState<string[]>(["Unassigned"])
+    const [driverOptions, setDriverOptions] = useState<{ name: string, id: string }[]>([{ name: "Unassigned", id: "" }])
 
     // Fetch real drivers from Firestore
     useEffect(() => {
@@ -47,8 +48,8 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
             .then(r => r.json())
             .then(d => {
                 if (d.drivers) {
-                    const names = d.drivers.map((dr: any) => dr.name)
-                    setDriverOptions([...names, "Unassigned"])
+                    const options = d.drivers.map((dr: any) => ({ name: dr.name, id: dr.id }))
+                    setDriverOptions([...options, { name: "Unassigned", id: "" }])
                 }
             }).catch(() => { })
     }, [])
@@ -79,7 +80,7 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
             if (!res.ok) throw new Error(result.error)
 
             setSaved(true)
-            setTimeout(() => { onSave(data); onClose() }, 800)
+            setTimeout(() => { onSave(data as any); onClose() }, 800)
         } catch (err: any) {
             alert(err.message || `Failed to ${initialData ? "update" : "add"} vehicle`)
         }
@@ -181,12 +182,15 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
                             <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showDriver && "rotate-180")} />
                         </button>
                         {showDriver && (
-                            <div className="mt-1 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
-                                {driverOptions.map((d) => (
-                                    <button key={d} onClick={() => { setData({ ...data, driverName: d }); setShowDriver(false) }}
-                                        className={cn("flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-left transition-colors", data.driverName === d ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
-                                        {data.driverName === d && <Check className="h-3.5 w-3.5 shrink-0" />}
-                                        {d}
+                            <div className="mt-1 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-md max-h-48 overflow-y-auto">
+                                {driverOptions.map((d: { name: string, id: string }) => (
+                                    <button 
+                                        key={`${d.id}-${d.name}`} 
+                                        onClick={() => { setData({ ...data, driverName: d.name, driverId: d.id }); setShowDriver(false) }}
+                                        className={cn("flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-left transition-colors", data.driverId === d.id ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}
+                                    >
+                                        {data.driverId === d.id && <Check className="h-3.5 w-3.5 shrink-0" />}
+                                        {d.name}
                                     </button>
                                 ))}
                             </div>

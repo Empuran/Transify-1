@@ -23,6 +23,14 @@ function LoginContent() {
     const assignedRole = roleMap[category] || "parent"
 
     const handleLogin = (role: UserRole, phone: string, name?: string) => {
+        if (role === "driver") {
+            // Role is driver, Firebase Auth is already completed in LoginScreen
+            // AuthProvider's onAuthStateChanged will handle the profile fetching
+            router.push("/driver")
+            return
+        }
+
+        // Parent or fallback mock login
         // Update auth state so layout allows access
         loginMock(role === "parent" ? "guardian" : (role as any), category, phone, name)
 

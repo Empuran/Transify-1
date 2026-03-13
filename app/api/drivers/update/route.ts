@@ -29,35 +29,66 @@ export async function POST(req: NextRequest) {
 
         // ── Global Name Sync ─────────────────────────────────────────────────
         // If name changed, update vehicles and routes where this driver is assigned
-        if (name && oldData?.name && name !== oldData.name) {
+        if ((name && oldData?.name && name !== oldData.name) || (vehicleId !== undefined && vehicleId !== oldData?.vehicle_id)) {
             const batch = adminDb.batch();
 
-            // Update Vehicles where driver_name matches old name OR driver_id matches
-            const vehiclesByName = await adminDb.collection("vehicles")
-                .where("organization_id", "==", organization_id)
-                .where("driver_name", "==", oldData.name)
-                .get();
-            vehiclesByName.forEach(doc => {
-                batch.update(doc.ref, { driver_name: name });
-            });
+            // 1. If name changed OR vehicle was unlinked, clear old vehicle's driver info
+            if (oldData?.vehicle_id && oldData.vehicle_id !== "Unassigned" && oldData.vehicle_id !== vehicleId) {
+                const oldVehicleQuery = await adminDb.collection("vehicles")
+                    .where("organization_id", "==", organization_id)
+                    .where("plate_number", "==", oldData.vehicle_id)
+                    .limit(1)
+                    .get();
+                if (!oldVehicleQuery.empty) {
+                    batch.update(oldVehicleQuery.docs[0].ref, { 
+                        driver_id: "", 
+                        driver_name: "Unassigned" 
+                    });
+                }
+            }
 
-            // Also try matching by driver_id field (if vehicles store it)
+            // 2. If name changed, update all resources by name match (legacy support)
+            if (name && oldData?.name && name !== oldData.name) {
+                const vehiclesByName = await adminDb.collection("vehicles")
+                    .where("organization_id", "==", organization_id)
+                    .where("driver_name", "==", oldData.name)
+                    .get();
+                vehiclesByName.forEach(doc => {
+                    batch.update(doc.ref, { driver_name: name });
+                });
+
+                const routesByName = await adminDb.collection("routes")
+                    .where("organization_id", "==", organization_id)
+                    .where("driver_name", "==", oldData.name)
+                    .get();
+                routesByName.forEach(doc => {
+                    batch.update(doc.ref, { driver_name: name });
+                });
+            }
+
+            // 3. Update current vehicle (match by driver_id or current vehicleId)
             const vehiclesById = await adminDb.collection("vehicles")
                 .where("organization_id", "==", organization_id)
                 .where("driver_id", "==", driver_id)
                 .get();
             vehiclesById.forEach(doc => {
-                batch.update(doc.ref, { driver_name: name });
+                batch.update(doc.ref, { driver_name: name || oldData?.name });
             });
 
-            // Update Routes where driver_name matches old name
-            const routesByName = await adminDb.collection("routes")
-                .where("organization_id", "==", organization_id)
-                .where("driver_name", "==", oldData.name)
-                .get();
-            routesByName.forEach(doc => {
-                batch.update(doc.ref, { driver_name: name });
-            });
+            // 4. Link to NOVEL vehicle if changed
+            if (vehicleId && vehicleId !== "Unassigned" && vehicleId !== oldData?.vehicle_id) {
+                const newVehicleQuery = await adminDb.collection("vehicles")
+                    .where("organization_id", "==", organization_id)
+                    .where("plate_number", "==", vehicleId)
+                    .limit(1)
+                    .get();
+                if (!newVehicleQuery.empty) {
+                    batch.update(newVehicleQuery.docs[0].ref, { 
+                        driver_id: driver_id, 
+                        driver_name: name || oldData?.name 
+                    });
+                }
+            }
 
             await batch.commit();
         }
