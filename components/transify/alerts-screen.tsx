@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   Clock,
   Loader2,
+  Navigation,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/hooks/use-auth"
@@ -19,8 +20,10 @@ import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, limit } 
 // ── Alert type icon helper ───────────────────────────────────────────────────
 function AlertIcon({ type }: { type: string }) {
   const t = (type || "").toLowerCase()
-  if (t.includes("arriv")) return <MapPin className="h-5 w-5 text-success" />
   if (t.includes("trip_started") || t.includes("started")) return <Bus className="h-5 w-5 text-primary" />
+  if (t.includes("trip_end") || t.includes("completed")) return <CheckCircle2 className="h-5 w-5 text-success" />
+  if (t.includes("stop_reached")) return <MapPin className="h-5 w-5 text-success" />
+  if (t.includes("approaching")) return <Navigation className="h-5 w-5 text-primary" />
   if (t.includes("delay")) return <Clock className="h-5 w-5 text-warning" />
   if (t.includes("sos") || t.includes("emergency")) return <AlertTriangle className="h-5 w-5 text-destructive" />
   return <Bell className="h-5 w-5 text-muted-foreground" />
@@ -28,8 +31,10 @@ function AlertIcon({ type }: { type: string }) {
 
 function alertBg(type: string) {
   const t = (type || "").toLowerCase()
-  if (t.includes("arriv")) return "bg-success/10"
-  if (t.includes("started")) return "bg-primary/10"
+  if (t.includes("trip_started")) return "bg-primary/10"
+  if (t.includes("trip_end") || t.includes("completed")) return "bg-success/10"
+  if (t.includes("stop_reached")) return "bg-success/5"
+  if (t.includes("approaching")) return "bg-primary/5"
   if (t.includes("delay")) return "bg-warning/10"
   if (t.includes("sos") || t.includes("emergency")) return "bg-destructive/10"
   return "bg-muted"
@@ -52,22 +57,62 @@ export function ParentAlertsScreen() {
 
   // Subscribe to alerts filtered by parent phone
   useEffect(() => {
-    const phone = profile?.phone
-    if (!phone) { setLoading(false); return }
+    if (!profile?.phone) { setLoading(false); return }
 
-    const q = query(
-      collection(db, "alerts"),
-      where("parent_phone", "==", phone),
-      orderBy("created_at", "desc"),
-      limit(50)
-    )
+    const clean = profile.phone.replace(/\s+/g, "").replace(/-/g, "")
+    const digits10 = clean.replace(/^\+91/, "").replace(/^0/, "").slice(-10)
+    const variants = digits10.length === 10 ? [`+91${digits10}`, `0${digits10}`, digits10] : [clean]
 
-    const unsub = onSnapshot(q, (snap) => {
-      setAlerts(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    let cancelled = false
+    const unsubscribers: Array<() => void> = []
+    const allAlerts: any[] = []
+    const seenAlertIds = new Set<string>()
+
+    const processSnapshot = () => {
+      if (cancelled) return
+      const sorted = [...allAlerts].sort((a, b) => {
+        const at = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at)
+        const bt = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at)
+        return bt.getTime() - at.getTime()
+      })
+      setAlerts(sorted.slice(0, 50))
       setLoading(false)
-    }, () => setLoading(false))
+    }
 
-    return unsub
+    variants.forEach(variant => {
+      const q = query(
+        collection(db, "alerts"),
+        where("parent_phone", "==", variant),
+        orderBy("created_at", "desc"),
+        limit(50)
+      )
+      const unsub = onSnapshot(q, (snap) => {
+        snap.docs.forEach(d => {
+          if (!seenAlertIds.has(d.id)) {
+            seenAlertIds.add(d.id)
+            allAlerts.push({ id: d.id, ...d.data() })
+          } else {
+            // Update existing
+            const idx = allAlerts.findIndex(a => a.id === d.id)
+            if (idx !== -1) allAlerts[idx] = { id: d.id, ...d.data() }
+          }
+        })
+        processSnapshot()
+      }, (err) => {
+        console.warn("Alert query failed for variant:", variant, err)
+      })
+      unsubscribers.push(unsub)
+    })
+
+    const timer = setTimeout(() => {
+      if (!cancelled && allAlerts.length === 0) setLoading(false)
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      unsubscribers.forEach(u => u())
+    }
   }, [profile?.phone])
 
   const unreadCount = alerts.filter(a => !a.read).length

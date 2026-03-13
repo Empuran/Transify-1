@@ -16,7 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useLiveTracking } from "@/hooks/use-live-tracking"
 import { calcDistanceKm } from "@/lib/utils"
 import { useJsApiLoader } from "@react-google-maps/api"
-import { collection, onSnapshot, query, where, updateDoc, doc, addDoc, serverTimestamp } from "firebase/firestore"
+import { collection, onSnapshot, query, where, updateDoc, doc, addDoc, serverTimestamp, setDoc, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { LiveMap } from "./live-map"
 
@@ -147,12 +147,13 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const [realName, setRealName] = useState("")
   const [driverId, setDriverId] = useState("")
   const [driverPhone, setDriverPhone] = useState("")
+  const [assignedVehicleId, setAssignedVehicleId] = useState<string>("")
   const [isVerifying, setIsVerifying] = useState(true)
   const [currentRoute, setCurrentRoute] = useState<any>(null)
   const [dynamicStops, setDynamicStops] = useState<any[]>([])
   const [currentStopIndex, setCurrentStopIndex] = useState(0)
   const [isAtStop, setIsAtStop] = useState(false)
-  const [geocodedStops, setGeocodedStops] = useState<{ lat: number; lng: number }[]>([])
+  const [geocodedStops, setGeocodedStops] = useState<({ lat: number; lng: number } | null)[]>([])
   const [deviationAlertSent, setDeviationAlertSent] = useState(false)
   // Track if we already auto-advanced to avoid double-trigger
   const lastAutoStopRef = useRef(-1)
@@ -160,6 +161,13 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const proximityAlertsSent = useRef<Set<number>>(new Set())
   // Track active trip_sessions doc ID (for updating on trip end)
   const activeTripDocId = useRef<string | null>(null)
+
+  // 4. Live tracking (Moved up to fix declaration order)
+  const { location, error: gpsError } = useLiveTracking(
+    selectedVehicle?.id || selectedVehicle?.plate_number || "",
+    tripState === "in-progress",
+    resolvedOrgId
+  )
 
   const normalize = (p: string) => p?.replace(/\D/g, '').slice(-10)
 
@@ -190,10 +198,118 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     }
   }, [resolvedOrgId, realName, driverPhone, profile?.phone, selectedVehicle, currentRoute])
 
+  // ── Notify parent helper ─────────────────────────────────────────────────
+  const sendParentAlerts = useCallback(async (type: "trip_started" | "stop_reached" | "approaching" | "trip_end", nextStopIndex?: number) => {
+    if (!resolvedOrgId || !currentRoute?.id) return
+
+    try {
+      // 1. Fetch all students on this route
+      const q = query(
+        collection(db, "students"),
+        where("organization_id", "==", resolvedOrgId),
+        where("route_id", "==", currentRoute.id)
+      )
+      const snap = await getDocs(q)
+      const students = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
+      
+      const currentStopName = dynamicStops[currentStopIndex]?.name || "Upcoming Stop"
+      const nextStopName = nextStopIndex !== undefined ? dynamicStops[nextStopIndex]?.name : null
+      
+      // Calculate ETA for approaching alerts
+      let calculatedEta: number | null = null
+      if (type === "approaching" && nextStopIndex !== undefined && location && location.latitude && location.longitude) {
+        const nextStop = geocodedStops[nextStopIndex]
+        if (nextStop && nextStop.lat && nextStop.lng) {
+          const dist = calcDistanceKm(location.latitude, location.longitude, nextStop.lat, nextStop.lng)
+          // Use current speed (min 15km/h for calculation if stopped)
+          const speed = Math.max(15, (location.speed || 0) * 3.6)
+          calculatedEta = Math.max(1, Math.round((dist / speed) * 60))
+        }
+      }
+
+      for (const st of students) {
+        if (!st.parent_phone) continue
+        
+        // Normalize phone to match login profiles
+        const pPhone = normalize(st.parent_phone)
+        const formattedPhone = pPhone.length === 10 ? `+91${pPhone}` : st.parent_phone
+
+        let title = ""
+        let description = ""
+        let alertKeySuffix = ""
+        let eta_minutes: number | null = null
+        let boarding_stop: string | null = null
+
+        if (type === "trip_started") {
+          title = "Trip Started"
+          description = `${st.name}'s bus (${selectedVehicle?.plate_number || "Unknown"}) has started the route.`
+          alertKeySuffix = `trip_started_${new Date().toDateString()}`
+        } else if (type === "trip_end") {
+          title = "Trip Completed"
+          description = `${st.name}'s bus has reached its destination.`
+          alertKeySuffix = `trip_end_${new Date().toDateString()}`
+        } else if (type === "stop_reached") {
+          title = "Bus at Stop"
+          description = `${st.name}'s bus has reached ${currentStopName}.`
+          alertKeySuffix = `stop_${currentStopIndex}_reached`
+        } else if (type === "approaching" && nextStopName) {
+          // Only alert if the NEXT stop roughly matches their boarding/dropoff point
+          const matchStop = (pointName: string) => {
+             const needle = nextStopName.split(',')[0].toLowerCase().trim()
+             const haystack = pointName.toLowerCase()
+             return haystack.includes(needle) || needle.includes(haystack)
+          }
+
+          if (tripDirection === "to-school" && st.boarding_point?.name && matchStop(st.boarding_point.name)) {
+            title = "Bus Approaching!"
+            description = `${st.name}'s bus is approaching ${nextStopName}. Please be ready to board.`
+            alertKeySuffix = `approaching_${nextStopIndex}`
+            eta_minutes = calculatedEta
+            boarding_stop = nextStopName.split(',')[0]
+          } else if (tripDirection === "from-school" && st.dropoff_point?.name && matchStop(st.dropoff_point.name)) {
+            title = "Bus Approaching Drop-off!"
+            description = `${st.name}'s bus is approaching ${nextStopName}.`
+            alertKeySuffix = `approaching_${nextStopIndex}`
+            eta_minutes = calculatedEta
+            boarding_stop = nextStopName.split(',')[0]
+          } else {
+            continue
+          }
+        } else {
+          continue
+        }
+
+        const alertKey = `${st.id}_${alertKeySuffix}`
+        const alertRef = doc(db, "alerts", alertKey)
+        
+        // Use merge: true so we don't overwrite if it already exists and prevents duplicates
+        setDoc(alertRef, {
+          type,
+          student_id: st.id,
+          student_name: st.name,
+          parent_phone: formattedPhone,
+          title,
+          description,
+          created_at: serverTimestamp(),
+          read: false,
+          eta_minutes,
+          boarding_stop,
+        }, { merge: true }).catch(err => console.error("Error setting alert doc:", err))
+      }
+    } catch (e) {
+      console.error("Failed to send parent alerts:", e)
+    }
+  }, [resolvedOrgId, currentRoute?.id, dynamicStops, currentStopIndex, selectedVehicle?.plate_number, tripDirection, location, geocodedStops])
+
   // 1. Fetch driver info
   const fetchDriverInfo = useCallback(async () => {
-    if (!resolvedOrgId || !profile?.phone) { if (resolvedOrgId || profile?.phone) setIsVerifying(false); return }
-    if (!realName) setIsVerifying(true)
+    if (!resolvedOrgId || !profile?.phone) { 
+      if (resolvedOrgId || profile?.phone) setIsVerifying(false); 
+      return 
+    }
+    
+    // Use a ref to prevent concurrent fetches or redundant ones if already loading
+    setIsVerifying(true)
     try {
       const res = await fetch(`/api/drivers/list?organization_id=${resolvedOrgId}`)
       const data = await res.json()
@@ -204,20 +320,16 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
           setRealName(currentDriver.name)
           setDriverId(currentDriver.id)
           setDriverPhone(currentDriver.phone || profile.phone || "")
+          
           const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
-          if (targetVehId && targetVehId !== "Unassigned" && vehicles.length > 0) {
-            const assignedVeh = vehicles.find((v: any) => v.id === targetVehId || v.plate_number === targetVehId || normalize(v.plate_number) === normalize(targetVehId))
-            if (assignedVeh) {
-              setSelectedVehicle(assignedVeh)
-              // Close picker if it was somehow open
-              setShowVehiclePicker(false)
-            }
+          if (targetVehId && targetVehId !== "Unassigned") {
+            setAssignedVehicleId(targetVehId)
           }
         }
       }
     } catch (e) { console.error("Failed to fetch driver info:", e) }
     finally { setIsVerifying(false) }
-  }, [resolvedOrgId, profile?.phone, vehicles, realName, selectedVehicle])
+  }, [resolvedOrgId, profile?.phone]) // Removed realName, selectedVehicle, vehicles
 
   // 2. Fetch vehicles
   const fetchVehicles = useCallback(async () => {
@@ -227,10 +339,13 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       const data = await res.json()
       if (data.vehicles) {
         setVehicles(data.vehicles)
-        if (data.vehicles.length === 1 && !selectedVehicle) setSelectedVehicle(data.vehicles[0])
+        // Auto-select if only one vehicle exists
+        if (data.vehicles.length === 1) {
+          setSelectedVehicle(data.vehicles[0])
+        }
       }
     } catch (e) { console.error("Failed to fetch vehicles:", e) }
-  }, [resolvedOrgId, selectedVehicle])
+  }, [resolvedOrgId]) // Removed selectedVehicle
 
   // 3. Real-time route listener (Firestore onSnapshot)
   useEffect(() => {
@@ -262,8 +377,33 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     return () => unsubscribe()
   }, [resolvedOrgId, selectedVehicle?.id, selectedVehicle?.plate_number, tripDirection])
 
-  useEffect(() => { if (resolvedOrgId) fetchVehicles() }, [resolvedOrgId, fetchVehicles])
-  useEffect(() => { if (vehicles.length > 0 || (resolvedOrgId && profile?.phone)) fetchDriverInfo() }, [vehicles.length, fetchDriverInfo, resolvedOrgId, profile?.phone])
+  // 4. Trigger initial fetches
+  useEffect(() => {
+    if (resolvedOrgId) {
+      fetchVehicles()
+    }
+  }, [resolvedOrgId, fetchVehicles])
+
+  useEffect(() => {
+    if (resolvedOrgId && profile?.phone) {
+      fetchDriverInfo()
+    }
+  }, [resolvedOrgId, profile?.phone, fetchDriverInfo])
+
+  // 5. Automatic Vehicle Assignment from Driver Data
+  useEffect(() => {
+    if (vehicles.length > 0 && assignedVehicleId && !selectedVehicle) {
+      const assignedVeh = vehicles.find((v: any) => 
+        v.id === assignedVehicleId || 
+        v.plate_number === assignedVehicleId || 
+        normalize(v.plate_number) === normalize(assignedVehicleId)
+      )
+      if (assignedVeh) {
+        setSelectedVehicle(assignedVeh)
+        setShowVehiclePicker(false)
+      }
+    }
+  }, [vehicles, assignedVehicleId, selectedVehicle])
 
   // 3b. Geocode stops for deviation checking
   useEffect(() => {
@@ -280,21 +420,14 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
           })
         })
       ))
-      setGeocodedStops(coords.filter((c): c is { lat: number; lng: number } => c !== null))
+      setGeocodedStops(coords)
     }
     geocodeAll()
   }, [isLoaded, dynamicStops])
 
-  // 4. Live tracking
-  const { location, error: gpsError } = useLiveTracking(
-    selectedVehicle?.id || selectedVehicle?.plate_number || "",
-    tripState === "in-progress",
-    resolvedOrgId
-  )
-
   const currentStops = dynamicStops.map((s, i) => ({
     ...s,
-    status: (i < currentStopIndex ? "completed" : i === currentStopIndex ? "current" : "upcoming") as "completed" | "current" | "upcoming"
+    status: (tripState === "completed" ? "completed" : i < currentStopIndex ? "completed" : i === currentStopIndex ? "current" : "upcoming") as "completed" | "current" | "upcoming"
   }))
   const completedStops = currentStopIndex
   const totalStops = currentStops.length
@@ -311,6 +444,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     // Simple check: is the driver within a reasonable distance (2.5km) of ANY of the stops?
     // Increased threshold to 2.5km to avoid false positives between distant stops
     const isNearAnyStop = geocodedStops.some(stop => {
+      if (!stop) return false
       const dist = calcDistanceKm(location.latitude, location.longitude, stop.lat, stop.lng)
       return dist < 2.5 
     })
@@ -326,8 +460,8 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     // --- PROXIMITY ALERT LOGIC ---
     // If not at stop, check distance to the NEXT stop (indexed by currentStopIndex)
-    if (!isAtStop && geocodedStops[currentStopIndex]) {
-      const nextStop = geocodedStops[currentStopIndex]
+    const nextStop = geocodedStops[currentStopIndex]
+    if (!isAtStop && nextStop) {
       const dist = calcDistanceKm(location.latitude, location.longitude, nextStop.lat, nextStop.lng)
       
       // ~1.7km is roughly 5 mins at 20km/h
@@ -379,6 +513,8 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
           current_stop: isAtStop 
             ? `At: ${dynamicStops[current]?.name || "Stop"}` 
             : `Next: ${dynamicStops[current]?.name || "Moving"}`,
+          current_stop_index: current,
+          is_at_stop: isAtStop,
           total_stops: total,
           last_progress_update: new Date().toISOString()
         })
@@ -395,17 +531,30 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     if (tripState !== "in-progress" || !location || !dynamicStops.length) return
 
     const currentStop = dynamicStops[currentStopIndex]
-    if (currentStop && currentStop.lat !== null && currentStop.lng !== null) {
-      const dist = calcDistanceKm(location.latitude, location.longitude, currentStop.lat, currentStop.lng)
+    const geocodedStop = geocodedStops[currentStopIndex]
+    const stopLat = currentStop?.lat || geocodedStop?.lat
+    const stopLng = currentStop?.lng || geocodedStop?.lng
+
+    if (stopLat != null && stopLng != null) {
+      const dist = calcDistanceKm(location.latitude, location.longitude, stopLat, stopLng)
       
       // If within 100 meters and not already marked as arrived at this specific stop
       if (dist < 0.1 && !isAtStop && lastAutoStopRef.current !== currentStopIndex) {
         lastAutoStopRef.current = currentStopIndex
         setIsAtStop(true)
         console.log(`📍 Automatically reached stop: ${currentStop.name}`)
+        sendParentAlerts("stop_reached")
+        if (currentStopIndex + 1 < dynamicStops.length) {
+          sendParentAlerts("approaching", currentStopIndex + 1)
+        }
+      }
+      // Departure detection: If we were at stop and now moved away > 200m
+      if (dist > 0.2 && isAtStop) {
+        setIsAtStop(false)
+        console.log(`🚌 Automatically departed from stop: ${currentStop.name}`)
       }
     }
-  }, [location, currentStopIndex, dynamicStops, tripState, isAtStop])
+  }, [location, currentStopIndex, dynamicStops, tripState, isAtStop, sendParentAlerts])
 
 
   // GPS warmup — silently pre-acquire fix when component mounts so trip start is instant
@@ -431,9 +580,12 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     if (selectedVehicle?.id) {
       updateDoc(doc(db, "vehicles", selectedVehicle.id), { 
-        status: "on-duty",
+        status: "on_duty",
         progress: 0,
-        current_stop: dynamicStops[0]?.name || "Starting"
+        current_stop: dynamicStops[0]?.name || "Starting",
+        current_stop_index: 0,
+        is_at_stop: true,
+        direction: tripDirection,
       }).catch(console.error)
     }
 
@@ -459,6 +611,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     notifyAdmin("trip_start", "🚌 Trip Started",
       `Vehicle ${selectedVehicle?.plate_number} started the trip on route ${currentRoute?.route_name || "—"} (${tripDirection === 'to-school' ? 'To School' : 'From School'}).`)
+    sendParentAlerts("trip_started")
   }
 
   const handleEndTrip = async () => {
@@ -470,7 +623,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     if (selectedVehicle?.id) {
       updateDoc(doc(db, "vehicles", selectedVehicle.id), { 
-        status: "off-duty",
+        status: "off_duty",
         progress: 0,
         current_stop: "" 
       }).catch(console.error)
@@ -487,6 +640,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
     notifyAdmin("trip_end", "🏁 Trip Ended",
       `Vehicle ${selectedVehicle?.plate_number} completed the trip on route ${currentRoute?.route_name || "—"}.`)
+    sendParentAlerts("trip_end")
   }
 
   // ── Auto-advance stop on geofence ────────────────────────────────────────
@@ -495,10 +649,15 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   // When the driver physically arrives, they can tap "Arrived" (manual fallback).
   // The "Depart Stop" button is removed — progress is: Arrived → auto move to next stop.
   const handleArrived = () => {
+    sendParentAlerts("stop_reached")
+    if (currentStopIndex + 1 < totalStops) {
+      sendParentAlerts("approaching", currentStopIndex + 1)
+    }
+
     if (currentStopIndex < totalStops - 1) {
       const nextIdx = currentStopIndex + 1
       setCurrentStopIndex(nextIdx)
-      setIsAtStop(true)
+      setIsAtStop(false)
     } else {
       handleEndTrip()
     }

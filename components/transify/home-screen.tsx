@@ -22,7 +22,7 @@ import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, runTransaction, query, where, onSnapshot, setDoc, getDocs } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, runTransaction, query, where, onSnapshot, setDoc, getDocs, orderBy, limit } from "firebase/firestore"
 
 
 // ── Child ────────────────────────────────────────────────────────────────────
@@ -36,12 +36,16 @@ interface ChildData {
   routeDocId?: string        // Firestore document ID of the assigned route
   rawVehicleId?: string      // Raw vehicle doc ID for the live listener
   status: "on-time" | "delayed" | "emergency" | "active"
+  boarding_point?: { name: string; lat: number; lng: number } | null
+  dropoff_point?: { name: string; lat: number; lng: number } | null
 }
 
 // Resolves raw Firestore IDs to human-readable vehicle plates, drivers, and route names
 const resolveStudentData = async (rawStudents: Array<{
   id: string, name: string, school: string, orgId: string,
   vehicleId: string, rawRoute: string, routeId?: string
+  boarding_point?: { name: string; lat: number; lng: number } | null
+  dropoff_point?: { name: string; lat: number; lng: number } | null
 }>): Promise<ChildData[]> => {
   const resolved = await Promise.all(
     rawStudents.map(async (s) => {
@@ -89,6 +93,8 @@ const resolveStudentData = async (rawStudents: Array<{
         rawVehicleId: s.vehicleId,
         orgId: s.orgId,
         status: "on-time" as const,
+        boarding_point: s.boarding_point,
+        dropoff_point: s.dropoff_point,
       } as ChildData & { orgId: string }
     })
   )
@@ -120,6 +126,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
   const [routeStops, setRouteStops] = useState<RouteStop[]>([])
 
   // Live vehicle state — updated by onSnapshot
+  const [isTripEnded, setIsTripEnded] = useState(false)
   const [vehicleData, setVehicleData] = useState<{
     speed: number | null
     status: string
@@ -128,13 +135,24 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
     etaMinutes: number | null
     lat: number | null
     lng: number | null
+    direction?: string
+    progress: number
   }>({
-    speed: null, status: "", currentStop: "", nextStop: "", etaMinutes: null, lat: null, lng: null
+    speed: null,
+    status: "",
+    currentStop: "",
+    nextStop: "",
+    etaMinutes: null,
+    lat: null,
+    lng: null,
+    direction: "to-school",
+    progress: 0,
   })
 
-  // Derived from Firestore student doc — vehicle_id for the live listener
   const [liveVehicleId, setLiveVehicleId] = useState<string>("")
   const [rawStopsWithCoords, setRawStopsWithCoords] = useState<any[]>([])
+  const [showTripEndAlert, setShowTripEndAlert] = useState(false)
+  const [showTripStartAlert, setShowTripStartAlert] = useState(false)
 
   // ── Phone normalization helper ──────────────────────────────────────────────
   const phoneVariants = (phone: string): string[] => {
@@ -157,7 +175,17 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
     let cancelled = false
     const unsubscribers: Array<() => void> = []
     const seenIds = new Set<string>()
-    let combinedRaw: Array<{ id: string; name: string; school: string; orgId: string; vehicleId: string; rawRoute: string; routeId: string }> = []
+    let combinedRaw: Array<{ 
+      id: string; 
+      name: string; 
+      school: string; 
+      orgId: string; 
+      vehicleId: string; 
+      rawRoute: string; 
+      routeId: string;
+      boarding_point?: { name: string; lat: number; lng: number } | null;
+      dropoff_point?: { name: string; lat: number; lng: number } | null;
+    }> = []
 
     const processSnapshot = async () => {
       if (cancelled) return
@@ -186,6 +214,8 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
               vehicleId: data.vehicle_id || "",
               rawRoute: data.route || "Unassigned",
               routeId: data.route_id || "",
+              boarding_point: data.boarding_point || null,
+              dropoff_point: data.dropoff_point || null,
             })
             changed = true
           }
@@ -210,6 +240,53 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.phone])
+
+  // Listen for Trip Completion Alerts
+  useEffect(() => {
+    if (!selectedChild?.id) return
+    const q = query(
+      collection(db, "alerts"),
+      where("student_id", "==", selectedChild.id),
+      where("type", "==", "trip_end"),
+      orderBy("created_at", "desc"),
+      limit(1)
+    )
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs[0].data()
+        // If alert is newer than 1 hour, show it
+        const createdAt = data.created_at?.toDate ? data.created_at.toDate() : new Date()
+        const diff = Date.now() - createdAt.getTime()
+        if (diff < 3600000 && !data.read) {
+          setShowTripEndAlert(true)
+        }
+      }
+    })
+    return unsub
+  }, [selectedChild?.id])
+
+  // Listen for Trip Started Alerts
+  useEffect(() => {
+    if (!selectedChild?.id) return
+    const q = query(
+      collection(db, "alerts"),
+      where("student_id", "==", selectedChild.id),
+      where("type", "==", "trip_started"),
+      orderBy("created_at", "desc"),
+      limit(1)
+    )
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        const data = snap.docs[0].data()
+        const createdAt = data.created_at?.toDate ? data.created_at.toDate() : new Date()
+        const diff = Date.now() - createdAt.getTime()
+        if (diff < 3600000 && !data.read) {
+          setShowTripStartAlert(true)
+        }
+      }
+    })
+    return unsub
+  }, [selectedChild?.id])
 
   // ── Haversine helper ──────────────────────────────────────────────────────
   const haversineKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -286,56 +363,117 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       const vData = vSnap.data()
       const vLat: number | null = vData.lat || vData.latitude || vData.current_lat || null
       const vLng: number | null = vData.lng || vData.longitude || vData.current_lng || null
-      const rawSpeed: number = vData.speed ?? null  // m/s from GPS, or km/h if driver sets it
-      // Normalise speed: if GPS provides m/s (usually <20 for buses), convert to km/h
+      const rawSpeed: number | null = vData.speed ?? null
       const speedKmh: number | null = rawSpeed !== null
-        ? (rawSpeed < 50 ? Math.round(rawSpeed * 3.6) : Math.round(rawSpeed))  // <50 = m/s
+        ? (rawSpeed < 50 ? Math.round(rawSpeed * 3.6) : Math.round(rawSpeed))
         : null
-      const status = (vData.status || "").toLowerCase()
-      const vehicleCurrentStop: string = vData.current_stop || ""
-
-      // ── Update route stop progress from vehicle's current_stop ────────────
-      if (rawStopsWithCoords.length > 0) {
-        const shortName = (s: any, i: number) => {
-          const n = s.name || s.stop_name || `Stop ${i + 1}`
-          return n.includes(",") ? n.split(",")[0].trim() : n
-        }
-        // Find which idx the vehicle is at by matching current_stop name
-        let currentIdx = -1
-        if (vehicleCurrentStop) {
-          currentIdx = rawStopsWithCoords.findIndex((s, i) => {
-            const sn = shortName(s, i).toLowerCase()
-            return vehicleCurrentStop.toLowerCase().includes(sn) || sn.includes(vehicleCurrentStop.toLowerCase())
-          })
-        }
-        const mapped: RouteStop[] = rawStopsWithCoords.map((s: any, idx: number) => ({
-          name: shortName(s, idx),
-          time: s.time || s.eta || "",
-          status: currentIdx < 0
-            ? (idx === 0 ? "completed" : idx === 1 ? "current" : "upcoming")
-            : idx < currentIdx ? "completed"
-            : idx === currentIdx ? "current"
-            : "upcoming",
-        }))
-        setRouteStops(mapped)
+      const rawStatus = (vData.status || "").toLowerCase()
+      const status = rawStatus.replace(/[- ]/g, "_")
+      
+      // Clear trip completion alert when a new trip starts
+      if (["active", "on_duty", "moving"].includes(status)) {
+        if (showTripEndAlert) setShowTripEndAlert(false)
       }
 
-      // ── Determine next stop ───────────────────────────────────────────────
-      const currentRouteStopNames = rawStopsWithCoords.map((s: any, i: number) => {
+      const direction = (vData.direction || "to-school").toLowerCase()
+      const vehicleCurrentStop: string = vData.current_stop || ""
+
+      const currentStopIndex = vData.current_stop_index
+      const isAtStop = vData.is_at_stop
+
+      let activeRouteStops = [...rawStopsWithCoords]
+      if (direction === "from-school") {
+        activeRouteStops.reverse()
+      }
+
+      // ── Truncate route for personalization ────────────────────────────────
+      // User only wants to see stops up to their child's drop-off point during return trips
+      let stopPointName = ""
+      if (direction === "from-school") {
+        stopPointName = selectedChild.dropoff_point?.name || selectedChild.boarding_point?.name || ""
+      }
+
+      if (stopPointName) {
+        const dropIdx = activeRouteStops.findIndex(s => {
+          const sName = (s.name || s.stop_name || "").toLowerCase()
+          const target = stopPointName.toLowerCase()
+          return sName.includes(target) || target.includes(sName)
+        })
+        if (dropIdx !== -1) {
+          activeRouteStops = activeRouteStops.slice(0, dropIdx + 1)
+        }
+      }
+
+      const currentRouteStopNames = activeRouteStops.map((s: any, i: number) => {
         const n = s.name || s.stop_name || `Stop ${i + 1}`
         return n.includes(",") ? n.split(",")[0].trim() : n
       })
-      let currentIdx2 = vehicleCurrentStop
-        ? currentRouteStopNames.findIndex(n => vehicleCurrentStop.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(vehicleCurrentStop.toLowerCase()))
-        : -1
-      const nextStopName = currentIdx2 >= 0 && currentIdx2 < currentRouteStopNames.length - 1
-        ? currentRouteStopNames[currentIdx2 + 1]
-        : (currentRouteStopNames[1] || "")
+
+      let currentIdx = -1
+      if (typeof currentStopIndex === 'number' && currentStopIndex >= 0) {
+        currentIdx = currentStopIndex
+      } else if (vehicleCurrentStop) {
+        // Fallback to name matching if index is missing
+        currentIdx = currentRouteStopNames.findIndex(n => 
+          vehicleCurrentStop.toLowerCase().includes(n.toLowerCase()) || 
+          n.toLowerCase().includes(vehicleCurrentStop.toLowerCase())
+        )
+      }
+
+      let tripEndedLocal = ["completed", "off_duty", "finished"].includes(status)
+
+      // ── Personalized Trip Completion ───────────────────────────────
+      // If the bus has reached or passed the parent's final stop in the truncated list, mark as ended for them.
+      if (activeRouteStops.length > 0) {
+        const personalLastIdx = activeRouteStops.length - 1
+        if (currentIdx > personalLastIdx || (currentIdx === personalLastIdx && isAtStop)) {
+          tripEndedLocal = true
+          currentIdx = personalLastIdx // Lock highlight at the end
+        }
+      }
+      setIsTripEnded(tripEndedLocal)
+
+      // ── Update route stop progress from vehicle's current_stop ────────────
+      if (activeRouteStops.length > 0) {
+        const mapped: RouteStop[] = activeRouteStops.map((s: any, idx: number) => {
+          const shortName = currentRouteStopNames[idx]
+          let st: "upcoming" | "current" | "completed" = "upcoming"
+          
+          if (tripEndedLocal) {
+            st = "completed"
+          } else if (currentIdx >= 0) {
+            if (idx < currentIdx) st = "completed"
+            else if (idx === currentIdx) st = "current"
+            else st = "upcoming"
+          }
+
+          return {
+            name: shortName,
+            time: s.time || s.eta || "",
+            status: st,
+          }
+        })
+        setRouteStops(mapped)
+      }
+
+      let nextStopName = ""
+      if (tripEndedLocal) {
+        nextStopName = "Destination Reached"
+      } else if (currentIdx >= 0) {
+        if (currentIdx < currentRouteStopNames.length - 1) {
+          nextStopName = currentRouteStopNames[currentIdx + 1]
+        } else {
+          nextStopName = "Destination Reached"
+        }
+      } else {
+        nextStopName = currentRouteStopNames[1] || ""
+      }
 
       // ── ETA to next stop ──────────────────────────────────────────────────
       let etaMinutes: number | null = null
       if (vLat && vLng && speedKmh && speedKmh > 0) {
-        const nextStopObj = rawStopsWithCoords[currentIdx2 >= 0 ? currentIdx2 + 1 : 1]
+        const nextStopIdx = currentIdx >= 0 ? currentIdx + 1 : 1
+        const nextStopObj = activeRouteStops[nextStopIdx]
         if (nextStopObj?.lat && nextStopObj?.lng) {
           const dist = haversineKm(vLat, vLng, nextStopObj.lat, nextStopObj.lng)
           etaMinutes = Math.max(1, Math.round((dist / speedKmh) * 60))
@@ -350,53 +488,10 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
         etaMinutes,
         lat: vLat,
         lng: vLng,
+        direction,
+        progress: vData.progress || 0,
       })
 
-      // ── ETA + trip_started alerts ─────────────────────────────────────────
-      if (phone) {
-        if (["on_duty", "active", "moving"].includes(status)) {
-          const startKey = `${selectedChild.id}_trip_started_${new Date().toDateString()}`
-          getDoc(doc(db, "alerts", startKey)).then(existing => {
-            if (!existing.exists()) {
-              setDoc(doc(db, "alerts", startKey), {
-                type: "trip_started",
-                student_id: selectedChild.id,
-                student_name: selectedChild.name,
-                parent_phone: phone,
-                title: "Trip Started",
-                description: `${selectedChild.name}'s bus (${selectedChild.vehicle}) has started the route.`,
-                created_at: serverTimestamp(),
-                read: false,
-              }).catch(() => {})
-            }
-          }).catch(() => {})
-        }
-
-        // Boarding point arrival alert
-        getDoc(doc(db, "students", selectedChild.id)).then(sSnap => {
-          if (!sSnap.exists()) return
-          const bp = sSnap.data().boarding_point as { name: string; lat: number; lng: number } | null
-          if (!bp?.lat || !vLat || !vLng) return
-          const dist = haversineKm(vLat, vLng, bp.lat, bp.lng)
-          if (dist <= 2) {
-            const etaMins = speedKmh && speedKmh > 0 ? Math.max(1, Math.round((dist / speedKmh) * 60)) : null
-            if (!etaMins) return
-            const alertKey = `${selectedChild.id}_arriving`
-            setDoc(doc(db, "alerts", alertKey), {
-              type: etaMins <= 2 ? "arriving" : "arriving_soon",
-              student_id: selectedChild.id,
-              student_name: selectedChild.name,
-              parent_phone: phone,
-              title: etaMins <= 2 ? "Bus Arriving Now!" : `Bus in ~${etaMins} min`,
-              description: `${selectedChild.name}'s bus is about ${etaMins} min away from ${bp.name}. Get ready!`,
-              eta_minutes: etaMins,
-              boarding_stop: bp.name,
-              created_at: serverTimestamp(),
-              read: false,
-            }, { merge: true }).catch(() => {})
-          }
-        }).catch(() => {})
-      }
     })
 
     return unsub
@@ -600,7 +695,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
           </svg>
 
           {/* Route polyline */}
-          <svg className="absolute inset-0 h-full w-full" viewBox="0 0 400 220" preserveAspectRatio="none">
+          <svg className={cn("absolute inset-0 h-full w-full", vehicleData.direction === "from-school" && "scale-x-[-1] scale-y-[-1]")} viewBox="0 0 400 220" preserveAspectRatio="none">
             <path
               d="M 40 190 Q 80 160 130 140 Q 180 120 230 90 Q 280 60 350 30"
               fill="none"
@@ -614,16 +709,23 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
               fill="none"
               stroke="var(--primary)"
               strokeWidth="3"
+              strokeLinecap="round"
             />
           </svg>
 
-          {/* Start */}
-          <div className="absolute bottom-6 left-6 flex h-6 w-6 items-center justify-center rounded-full bg-success ring-4 ring-success/20">
+          {/* Start Point */}
+          <div className={cn(
+            "absolute flex h-6 w-6 items-center justify-center rounded-full bg-success ring-4 ring-success/20",
+            vehicleData.direction === "from-school" ? "right-8 top-4" : "bottom-6 left-6"
+          )}>
             <div className="h-2 w-2 rounded-full bg-success-foreground" />
           </div>
 
           {/* Vehicle Marker */}
-          <div className="absolute left-[48%] top-[42%] -translate-x-1/2 -translate-y-1/2">
+          <div className={cn(
+            "absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-1000",
+            vehicleData.direction === "from-school" ? "right-[48%] bottom-[42%]" : "left-[48%] top-[42%]"
+          )}>
             <div className="relative">
               <div className="absolute -inset-4 animate-ping rounded-full bg-primary/20" />
               <div className="relative flex h-11 w-11 items-center justify-center rounded-full bg-primary shadow-lg ring-4 ring-primary/20">
@@ -632,34 +734,65 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
             </div>
           </div>
 
-          {/* Destination */}
-          <div className="absolute right-8 top-4 flex h-6 w-6 items-center justify-center rounded-full bg-destructive ring-4 ring-destructive/20">
+          {/* Destination Point */}
+          <div className={cn(
+            "absolute flex h-6 w-6 items-center justify-center rounded-full bg-destructive ring-4 ring-destructive/20",
+            vehicleData.direction === "from-school" ? "bottom-6 left-6" : "right-8 top-4"
+          )}>
             <MapPin className="h-3 w-3 text-destructive-foreground" />
           </div>
         </div>
-
-        {/* ETA Banner */}
-        <div className="flex items-center justify-between bg-primary px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Navigation className="h-4 w-4 text-primary-foreground" />
-            <span className="text-sm font-semibold text-primary-foreground">
-              Arriving in 6 mins
-            </span>
+      </div>
+      {/* Trip Status Bar */}
+      <div className="mx-4 mt-4 overflow-hidden rounded-2xl bg-card shadow-lg ring-1 ring-border">
+        <div className={cn(
+          "flex items-center justify-between px-5 py-4 transition-colors duration-500",
+          isTripEnded ? "bg-success" : "bg-primary"
+        )}>
+          <div className="flex items-center gap-3">
+            <div className={cn(
+                "flex h-10 w-10 items-center justify-center rounded-xl",
+                isTripEnded ? "bg-white/20" : "bg-white/10"
+            )}>
+              {isTripEnded ? (
+                <CheckCircle2 className="h-5 w-5 text-white" />
+              ) : (
+                <Navigation className="h-5 w-5 text-white animate-pulse" />
+              )}
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs font-medium text-white/70 uppercase tracking-wider">Current Status</span>
+              <span className="text-base font-bold text-white tracking-tight">
+                {isTripEnded ? "Trip Completed" : ["active", "on_duty", "moving"].includes(vehicleData.status) ? "In Transit" : "Trip Not Started"}
+              </span>
+            </div>
           </div>
-          {/* Animated countdown circle */}
-          <div className="relative flex h-10 w-10 items-center justify-center">
-            <svg className="absolute inset-0 -rotate-90" viewBox="0 0 36 36">
-              <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
-              <circle
-                cx="18" cy="18" r="15" fill="none"
-                stroke="white" strokeWidth="3"
-                strokeDasharray="94.2" strokeDashoffset="31.4"
-                strokeLinecap="round"
-                className="transition-all duration-1000"
-              />
-            </svg>
-            <span className="text-xs font-bold text-primary-foreground">6m</span>
-          </div>
+          
+          {!isTripEnded && ["active", "on_duty", "moving"].includes(vehicleData.status) && (
+            <div className="relative flex h-10 w-10 items-center justify-center">
+              <svg className="h-10 w-10 -rotate-90">
+                <circle
+                  cx="20"
+                  cy="20"
+                  r="16"
+                  className="fill-none stroke-white/20 stroke-[3]"
+                />
+                <circle
+                  cx="20"
+                  cy="20"
+                  r="16"
+                  className="fill-none stroke-white stroke-[3] transition-all duration-1000"
+                  strokeDasharray={100}
+                  strokeDashoffset={100 - (vehicleData.progress || 0)}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute flex flex-col items-center">
+                 <div className="h-1 w-2.5 rounded-full bg-white/40 mb-0.5" />
+                 <div className="h-1 w-2.5 rounded-full bg-white/40" />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -757,32 +890,26 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
           {/* Status */}
           <div className="flex items-center gap-3">
             <div className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-xl",
-              ["on_duty", "active", "moving"].includes(vehicleData.status) ? "bg-success/10"
-              : vehicleData.status === "off-duty" ? "bg-muted"
-              : "bg-muted"
+                "h-10 w-10 flex items-center justify-center rounded-xl",
+                isTripEnded ? "bg-success/10 text-success" 
+                : ["on_duty", "active", "moving"].includes(vehicleData.status) ? "bg-success/10 text-success"
+                : "bg-muted text-muted-foreground"
             )}>
-              <Navigation className={cn(
-                "h-5 w-5",
-                ["on_duty", "active", "moving"].includes(vehicleData.status) ? "text-success"
-                : "text-muted-foreground"
-              )} />
+               <Navigation className="h-5 w-5" />
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Status</p>
               <p className={cn(
                 "text-sm font-semibold",
-                ["on_duty", "active", "moving"].includes(vehicleData.status) ? "text-success"
-                : vehicleData.status ? "text-foreground"
-                : "text-muted-foreground"
+                isTripEnded ? "text-success"
+                : ["on_duty", "active", "moving"].includes(vehicleData.status) ? "text-success"
+                : "text-foreground"
               )}>
-                {vehicleData.status === "on_duty" || vehicleData.status === "active" || vehicleData.status === "moving"
-                  ? "In Transit"
-                  : vehicleData.status === "off-duty" || vehicleData.status === "off_duty"
-                  ? "Off Duty"
-                  : vehicleData.status
-                    ? vehicleData.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
-                    : "Not Active"}
+                {isTripEnded ? "Trip Completed" 
+                  : ["on_duty", "active", "moving"].includes(vehicleData.status) ? "In Transit"
+                  : vehicleData.status === "off_duty" ? "Off Duty"
+                  : vehicleData.status ? vehicleData.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+                  : "Not Active"}
               </p>
             </div>
           </div>
@@ -861,6 +988,47 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
                 </Button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Trip Started Alert */}
+      {showTripStartAlert && (
+        <div className="fixed inset-x-4 top-[env(safe-area-inset-top)] z-50 mt-4 animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-3 rounded-2xl bg-primary p-4 shadow-xl ring-4 ring-primary/20">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">
+              <Bus className="h-6 w-6 text-white" />
+            </div>
+            <div className="flex flex-1 flex-col">
+              <span className="text-sm font-bold text-white">Trip Started!</span>
+              <span className="text-xs text-white/90">{selectedChild?.name}'s bus has started its journey.</span>
+            </div>
+            <button 
+              onClick={() => setShowTripStartAlert(false)}
+              className="rounded-lg bg-white/20 p-2 text-white transition-colors active:bg-white/30"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Trip Completion Alert */}
+      {showTripEndAlert && (
+        <div className="fixed inset-x-4 top-[env(safe-area-inset-top)] z-50 mt-4 animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-3 rounded-2xl bg-success p-4 shadow-xl ring-4 ring-success/20">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">
+              <CheckCircle2 className="h-6 w-6 text-white" />
+            </div>
+            <div className="flex flex-1 flex-col">
+              <span className="text-sm font-bold text-white">Trip Completed!</span>
+              <span className="text-xs text-white/90">{selectedChild?.name}'s bus has reached its destination.</span>
+            </div>
+            <button 
+              onClick={() => setShowTripEndAlert(false)}
+              className="rounded-lg bg-white/20 p-2 text-white transition-colors active:bg-white/30"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}

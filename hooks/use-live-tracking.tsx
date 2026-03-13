@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { doc, setDoc, addDoc, collection, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
@@ -16,6 +16,21 @@ interface LocationUpdate {
 export function useLiveTracking(vehicleId: string, isActive: boolean, organizationId?: string) {
     const [location, setLocation] = useState<LocationUpdate | null>(null)
     const [error, setError] = useState<string | null>(null)
+    
+    // Quota optimization refs
+    const lastWriteRef = useRef({ live: 0, heartbeat: 0 })
+    const lastLoggedLoc = useRef<{ lat: number; lng: number } | null>(null)
+
+    const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+        const R = 6371 // km
+        const dLat = (lat2 - lat1) * Math.PI / 180
+        const dLon = (lon2 - lon1) * Math.PI / 180
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return R * c
+    }
 
     useEffect(() => {
         let watchId: number
@@ -39,32 +54,38 @@ export function useLiveTracking(vehicleId: string, isActive: boolean, organizati
 
                     setLocation(newLoc)
 
-                    try {
-                        // 1. Update current live position (single doc — always latest)
-                        await setDoc(doc(db, "live_locations", vehicleId), {
+                    const now = Date.now()
+                    // 1. Throttle live position (single doc) — every 2 seconds
+                    if (!lastWriteRef.current.live || now - lastWriteRef.current.live > 2000) {
+                        setDoc(doc(db, "live_locations", vehicleId), {
                             ...newLoc,
                             organization_id: organizationId,
                             last_updated: new Date().toISOString(),
                             status: "active",
-                        }, { merge: true })
+                        }, { merge: true }).catch(() => { })
+                        lastWriteRef.current.live = now
+                    }
 
-                        // 2. Append to route history subcollection (one doc per point — full path)
-                        await addDoc(collection(db, "live_locations", vehicleId, "route_history"), {
-                            latitude: newLoc.latitude,
-                            longitude: newLoc.longitude,
-                            heading: newLoc.heading,
-                            speed: newLoc.speed,
-                            timestamp: newLoc.timestamp,
+                    // 2. Append to history — only if moved > 20m from last logged point
+                    const distMoved = lastLoggedLoc.current 
+                        ? haversine(newLoc.latitude, newLoc.longitude, lastLoggedLoc.current.lat, lastLoggedLoc.current.lng)
+                        : 999
+                    
+                    if (distMoved > 0.02) {
+                        addDoc(collection(db, "live_locations", vehicleId, "route_history"), {
+                            ...newLoc,
                             recorded_at: serverTimestamp(),
-                        })
+                        }).catch(() => { })
+                        lastLoggedLoc.current = { lat: newLoc.latitude, lng: newLoc.longitude }
+                    }
 
-                        // 3. Update last position heartbeat and cached speed for list views
-                        await setDoc(doc(db, "vehicles", vehicleId), {
+                    // 3. Heartbeat (vehicles doc) — every 5 seconds
+                    if (!lastWriteRef.current.heartbeat || now - lastWriteRef.current.heartbeat > 5000) {
+                        setDoc(doc(db, "vehicles", vehicleId), {
                             speed: newLoc.speed,
                             last_position_update: new Date().toISOString(),
-                        }, { merge: true })
-                    } catch (err: any) {
-                        console.error("Failed to push location:", err)
+                        }, { merge: true }).catch(() => { })
+                        lastWriteRef.current.heartbeat = now
                     }
                 },
                 (err) => {

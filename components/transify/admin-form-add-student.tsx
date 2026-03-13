@@ -23,6 +23,7 @@ export interface StudentData {
     vehicle_id: string
     organization: string
     boarding_point?: { name: string; lat: number; lng: number } | null
+    dropoff_point?: { name: string; lat: number; lng: number } | null
 }
 
 const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
@@ -42,12 +43,14 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         vehicle_id: initialData?.vehicle_id || "",
         organization: initialData?.organization || "",
         boarding_point: initialData?.boarding_point || null,
+        dropoff_point: initialData?.dropoff_point || null,
     })
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
     const [showVehicle, setShowVehicle] = useState(false)
     const [showSection, setShowSection] = useState(false)
     const [showBoarding, setShowBoarding] = useState(false)
+    const [showDropoff, setShowDropoff] = useState(false)
     const [saved, setSaved] = useState(false)
     const [routeOptions, setRouteOptions] = useState<RouteOption[]>([])
     const [vehicleOptions, setVehicleOptions] = useState<{ id: string; plate: string }[]>([])
@@ -112,10 +115,14 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
     useEffect(() => {
         const routeObj = routeOptions.find(r => r.name === data.route)
         setBoardingStops(routeObj?.stops || [])
-        // Clear boarding point if route changed and old boarding point no longer valid
-        if (data.boarding_point && routeObj) {
-            const stillValid = routeObj.stops.some(s => s.name === data.boarding_point?.name)
-            if (!stillValid) setData(prev => ({ ...prev, boarding_point: null }))
+        // Clear points if route changed and old points no longer valid
+        if (routeObj) {
+            if (data.boarding_point && !routeObj.stops.some(s => s.name === data.boarding_point?.name)) {
+                setData(prev => ({ ...prev, boarding_point: null }))
+            }
+            if (data.dropoff_point && !routeObj.stops.some(s => s.name === data.dropoff_point?.name)) {
+                setData(prev => ({ ...prev, dropoff_point: null }))
+            }
         }
     }, [data.route, routeOptions])
 
@@ -290,50 +297,67 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                         </div>
                     </div>
 
-                    {/* ── Boarding Point (only shown when a route with stops is selected) ── */}
                     {boardingStops.length > 0 && (
-                        <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-semibold text-foreground">
-                                Boarding Point
-                                <span className="ml-1 text-xs font-normal text-muted-foreground">(stop where student boards the bus)</span>
-                            </label>
-                            <button
-                                onClick={() => { setShowBoarding(!showBoarding); setShowRoute(false); setShowVehicle(false) }}
-                                className={cn(
-                                    "flex h-12 items-center justify-between rounded-xl border bg-background px-3.5 transition-colors",
-                                    data.boarding_point ? "border-primary/50" : "border-border"
+                        <div className="grid grid-cols-2 gap-3">
+                            {/* Boarding Point */}
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-semibold text-foreground">Boarding Point</label>
+                                <button
+                                    onClick={() => { setShowBoarding(!showBoarding); setShowDropoff(false); setShowRoute(false); setShowVehicle(false) }}
+                                    className={cn(
+                                        "flex h-12 items-center justify-between rounded-xl border bg-background px-3 transition-colors",
+                                        data.boarding_point ? "border-primary/50" : "border-border"
+                                    )}
+                                >
+                                    <div className="flex items-center gap-1.5 overflow-hidden text-left">
+                                        <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                                        <span className={cn("text-[10px] truncate leading-tight", data.boarding_point ? "text-foreground font-medium" : "text-muted-foreground")}>
+                                            {data.boarding_point?.name || "Select boarding"}
+                                        </span>
+                                    </div>
+                                    <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform shrink-0", showBoarding && "rotate-180")} />
+                                </button>
+                                {showBoarding && (
+                                    <div className="absolute z-20 mt-16 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-48 overflow-y-auto min-w-[160px]">
+                                        {boardingStops.map((stop, i) => (
+                                            <button key={i} onClick={() => { setData({ ...data, boarding_point: stop }); setShowBoarding(false) }}
+                                                className={cn("flex items-center gap-2 rounded-lg px-2 py-2 text-[10px] text-left transition-colors", data.boarding_point?.name === stop.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                                {stop.name}
+                                            </button>
+                                        ))}
+                                    </div>
                                 )}
-                            >
-                                <div className="flex items-center gap-2 overflow-hidden">
-                                    <MapPin className="h-4 w-4 text-primary shrink-0" />
-                                    <span className={cn("text-xs truncate", data.boarding_point ? "text-foreground font-medium" : "text-muted-foreground")}>
-                                        {data.boarding_point?.name || "Select boarding stop"}
-                                    </span>
-                                </div>
-                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform shrink-0", showBoarding && "rotate-180")} />
-                            </button>
-                            {showBoarding && (
-                                <div className="flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-48 overflow-y-auto">
-                                    {boardingStops.map((stop, i) => (
-                                        <button
-                                            key={i}
-                                            onClick={() => { setData({ ...data, boarding_point: stop }); setShowBoarding(false) }}
-                                            className={cn(
-                                                "flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs text-left transition-colors",
-                                                data.boarding_point?.name === stop.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground"
-                                            )}
-                                        >
-                                            <div className={cn(
-                                                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
-                                                data.boarding_point?.name === stop.name ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                                            )}>
-                                                {i + 1}
-                                            </div>
-                                            {stop.name}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
+                            </div>
+
+                            {/* Drop-off Point */}
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-semibold text-foreground">Drop-off Point</label>
+                                <button
+                                    onClick={() => { setShowDropoff(!showDropoff); setShowBoarding(false); setShowRoute(false); setShowVehicle(false) }}
+                                    className={cn(
+                                        "flex h-12 items-center justify-between rounded-xl border bg-background px-3 transition-colors",
+                                        data.dropoff_point ? "border-primary/50" : "border-border"
+                                    )}
+                                >
+                                    <div className="flex items-center gap-1.5 overflow-hidden text-left">
+                                        <MapPin className="h-3.5 w-3.5 text-success shrink-0" />
+                                        <span className={cn("text-[10px] truncate leading-tight", data.dropoff_point ? "text-foreground font-medium" : "text-muted-foreground")}>
+                                            {data.dropoff_point?.name || "Select drop-off"}
+                                        </span>
+                                    </div>
+                                    <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform shrink-0", showDropoff && "rotate-180")} />
+                                </button>
+                                {showDropoff && (
+                                    <div className="absolute z-20 mt-16 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-48 overflow-y-auto min-w-[160px]">
+                                        {boardingStops.map((stop, i) => (
+                                            <button key={i} onClick={() => { setData({ ...data, dropoff_point: stop }); setShowDropoff(false) }}
+                                                className={cn("flex items-center gap-2 rounded-lg px-2 py-2 text-[10px] text-left transition-colors", data.dropoff_point?.name === stop.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
+                                                {stop.name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
 
