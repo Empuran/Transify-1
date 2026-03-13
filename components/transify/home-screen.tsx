@@ -34,52 +34,48 @@ interface ChildData {
   driver: string
   route: string
   routeDocId?: string        // Firestore document ID of the assigned route
+  rawVehicleId?: string      // Raw vehicle doc ID for the live listener
   status: "on-time" | "delayed" | "emergency" | "active"
 }
 
 // Resolves raw Firestore IDs to human-readable vehicle plates, drivers, and route names
-const resolveStudentData = async (rawStudents: Array<{id: string, name: string, school: string, vehicleId: string, rawRoute: string}>): Promise<ChildData[]> => {
+const resolveStudentData = async (rawStudents: Array<{
+  id: string, name: string, school: string, orgId: string,
+  vehicleId: string, rawRoute: string, routeId?: string
+}>): Promise<ChildData[]> => {
   const resolved = await Promise.all(
     rawStudents.map(async (s) => {
       let vehiclePlate = s.vehicleId || "Not Assigned"
       let driverName = "Not Assigned"
       let routeName = s.rawRoute
-      let routeDocId: string | undefined
+      let routeDocId: string | undefined = s.routeId
 
-      // Resolve vehicle info
-      if (s.vehicleId && s.vehicleId.length > 3) {
-        try {
-          const vSnap = await getDoc(doc(db, "vehicles", s.vehicleId))
-          if (vSnap.exists()) {
-            const vData = vSnap.data()
-            vehiclePlate = vData.plate_number || vData.registration_number || s.vehicleId
-            driverName = vData.driver_name || vData.assigned_driver || "Not Assigned"
-          }
-        } catch { /* keep raw id */ }
-      }
-
-      // Resolve route info — try doc ID first, then query by route_name / route_id
-      if (s.rawRoute && s.rawRoute !== "Unassigned") {
-        try {
-          const rSnap = await getDoc(doc(db, "routes", s.rawRoute))
-          if (rSnap.exists()) {
-            routeDocId = rSnap.id
-            routeName = rSnap.data().route_name || rSnap.data().name || s.rawRoute
-          }
-        } catch { /* ignore */ }
-
-        // If the rawRoute is a name string (not a doc ID), query by route_name
-        if (!routeDocId) {
+      if (s.orgId) {
           try {
-            const { getDocs, query: q, collection: col, where: wh } = await import("firebase/firestore")
-            const q2 = q(col(db, "routes"), wh("route_name", "==", s.rawRoute))
-            const snap2 = await getDocs(q2)
-            if (!snap2.empty) {
-              routeDocId = snap2.docs[0].id
-              routeName = snap2.docs[0].data().route_name || s.rawRoute
-            }
-          } catch { /* keep raw */ }
-        }
+              // Fetch from admin API to bypass client Firestore rules
+              const [vRes, rRes] = await Promise.all([
+                  s.vehicleId && s.vehicleId !== "Unassigned" ? fetch(`/api/vehicles/list?organization_id=${s.orgId}`).then(r => r.json()) : Promise.resolve(null),
+                  s.rawRoute && s.rawRoute !== "Unassigned" ? fetch(`/api/routes/list?organization_id=${s.orgId}`).then(r => r.json()) : Promise.resolve(null)
+              ])
+
+              if (vRes?.vehicles) {
+                  const vMatch = vRes.vehicles.find((v: any) => v.id === s.vehicleId || v.plate_number === s.vehicleId)
+                  if (vMatch) {
+                      vehiclePlate = vMatch.plate_number || vMatch.registration_number || s.vehicleId
+                      driverName = vMatch.driver_name || vMatch.assigned_driver || "Not Assigned"
+                  }
+              }
+
+              if (rRes?.routes) {
+                  const rMatch = rRes.routes.find((r: any) => r.id === s.routeId || r.route_name === s.rawRoute)
+                  if (rMatch) {
+                      routeDocId = rMatch.id
+                      routeName = rMatch.route_name || s.rawRoute
+                  }
+              }
+          } catch (err) {
+              console.error("Resolve error:", err)
+          }
       }
 
       return {
@@ -90,8 +86,10 @@ const resolveStudentData = async (rawStudents: Array<{id: string, name: string, 
         driver: driverName,
         route: routeName,
         routeDocId,
+        rawVehicleId: s.vehicleId,
+        orgId: s.orgId,
         status: "on-time" as const,
-      }
+      } as ChildData & { orgId: string }
     })
   )
   return resolved
@@ -101,15 +99,13 @@ const resolveStudentData = async (rawStudents: Array<{id: string, name: string, 
 interface ParentHomeScreenProps {
   isPremium?: boolean
   onUpgrade?: () => void
-  onSOS?: () => void
 }
 
-export function ParentHomeScreen({ isPremium = false, onUpgrade, onSOS }: ParentHomeScreenProps) {
+export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScreenProps) {
   const { profile } = useAuth()
   const [students, setStudents] = useState<ChildData[]>([])
   const [selectedChild, setSelectedChild] = useState<ChildData | null>(null)
   const [showChildPicker, setShowChildPicker] = useState(false)
-  const [showSosConfirm, setShowSosConfirm] = useState(false)
 
   const userName = profile?.globalName || "User"
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
@@ -123,160 +119,288 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade, onSOS }: Parent
   type RouteStop = { name: string; time: string; status: "completed" | "current" | "upcoming" }
   const [routeStops, setRouteStops] = useState<RouteStop[]>([])
 
-  // Fetch real students from Firestore and resolve vehicle/driver/route info
+  // Live vehicle state — updated by onSnapshot
+  const [vehicleData, setVehicleData] = useState<{
+    speed: number | null
+    status: string
+    currentStop: string
+    nextStop: string
+    etaMinutes: number | null
+    lat: number | null
+    lng: number | null
+  }>({
+    speed: null, status: "", currentStop: "", nextStop: "", etaMinutes: null, lat: null, lng: null
+  })
+
+  // Derived from Firestore student doc — vehicle_id for the live listener
+  const [liveVehicleId, setLiveVehicleId] = useState<string>("")
+  const [rawStopsWithCoords, setRawStopsWithCoords] = useState<any[]>([])
+
+  // ── Phone normalization helper ──────────────────────────────────────────────
+  const phoneVariants = (phone: string): string[] => {
+    const clean = phone.replace(/\s+/g, "").replace(/-/g, "")
+    const digits10 = clean.replace(/^\+91/, "").replace(/^0/, "").slice(-10)
+    if (digits10.length !== 10) return [clean]
+    return [
+      `+91${digits10}`,
+      `+91 ${digits10}`,
+      `0${digits10}`,
+      digits10,
+    ]
+  }
+
+  // Fetch real students from Firestore — tries multiple phone formats for resilience
   useEffect(() => {
     if (!profile?.phone) return
 
-    const q = query(
-      collection(db, "students"),
-      where("parent_phone", "==", profile.phone)
-    )
+    const variants = phoneVariants(profile.phone)
+    let cancelled = false
+    const unsubscribers: Array<() => void> = []
+    const seenIds = new Set<string>()
+    let combinedRaw: Array<{ id: string; name: string; school: string; orgId: string; vehicleId: string; rawRoute: string; routeId: string }> = []
 
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const rawStudents = snapshot.docs.map(docSnap => {
-        const data = docSnap.data()
-        return {
-          id: docSnap.id,
-          name: data.name || "Unknown",
-          school: data.organization || data.school || "School",
-          vehicleId: data.vehicle_id || "",
-          rawRoute: data.route || "Unassigned",
-        }
-      })
-
-      const enriched = await resolveStudentData(rawStudents)
+    const processSnapshot = async () => {
+      if (cancelled) return
+      const enriched = await resolveStudentData(combinedRaw)
+      if (cancelled) return
       setStudents(enriched)
-      // Only auto-select first child if nothing is selected yet
-      setSelectedChild(prev => prev ? (enriched.find(s => s.id === prev.id) || enriched[0] || null) : (enriched[0] || null))
-    }, (err) => console.error("Parent students listener error:", err))
+      setSelectedChild(prev =>
+        prev ? (enriched.find(s => s.id === prev.id) || enriched[0] || null) : (enriched[0] || null)
+      )
+    }
 
-    return unsubscribe
+    // Subscribe to each phone variant
+    variants.forEach(variant => {
+      const q = query(collection(db, "students"), where("parent_phone", "==", variant))
+      const unsub = onSnapshot(q, snapshot => {
+        let changed = false
+        snapshot.docs.forEach(docSnap => {
+          if (!seenIds.has(docSnap.id)) {
+            seenIds.add(docSnap.id)
+            const data = docSnap.data()
+            combinedRaw.push({
+              id: docSnap.id,
+              name: data.name || "Unknown",
+              school: data.organization || data.school || "School",
+              orgId: data.organization_id || "org_1",
+              vehicleId: data.vehicle_id || "",
+              rawRoute: data.route || "Unassigned",
+              routeId: data.route_id || "",
+            })
+            changed = true
+          }
+        })
+        if (changed) processSnapshot()
+      }, err => console.warn("Student query variant failed:", variant, err))
+      unsubscribers.push(unsub)
+    })
+
+    // Initial load after 1.5s even if no results — clears loading state
+    const timer = setTimeout(() => {
+      if (!cancelled && combinedRaw.length === 0) {
+        setStudents([])
+        setSelectedChild(null)
+      }
+    }, 1500)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      unsubscribers.forEach(u => u())
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.phone])
 
-  // Fetch route stops when selected child changes
+  // ── Haversine helper ──────────────────────────────────────────────────────
+  const haversineKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+    const R = 6371
+    const dLat = (lat2 - lat1) * Math.PI / 180
+    const dLng = (lng2 - lng1) * Math.PI / 180
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  }
+
+  // Fetch route stops AND vehicle_id when selected child changes
   useEffect(() => {
     if (!selectedChild?.routeDocId) {
       setRouteStops([])
+      setRawStopsWithCoords([])
       return
     }
     let cancelled = false
-    getDoc(doc(db, "routes", selectedChild.routeDocId)).then(rSnap => {
-      if (cancelled || !rSnap.exists()) return
-      const rawStops: any[] = rSnap.data().stops || []
-      const startPoint = rSnap.data().start_point || ""
-      const endPoint = rSnap.data().end_point || ""
 
-      // Build ordered list: startPoint + middle stops + endPoint
-      const allStops = [
-        ...(startPoint ? [{ name: startPoint }] : []),
-        ...rawStops,
-        ...(endPoint && endPoint !== startPoint ? [{ name: endPoint }] : []),
-      ]
+    // Use rawVehicleId already stored on selectedChild from resolveStudentData
+    setLiveVehicleId(selectedChild.rawVehicleId || "")
 
-      // Status: mark first stop as completed, second as current, rest upcoming
-      // (a more sophisticated implementation would compare with live tracking progress)
-      const mapped: RouteStop[] = allStops.map((s: any, idx: number) => {
-        // Trim full address strings like "Kakkanad, Kerala, India" → "Kakkanad"
-        const rawName = s.name || s.stop_name || `Stop ${idx + 1}`
-        const shortName = rawName.includes(",") ? rawName.split(",")[0].trim() : rawName
-        return {
-          name: shortName,
-          time: s.time || s.eta || "",
-          status: idx === 0 ? "completed" : idx === 1 ? "current" : "upcoming",
-        }
+    // Fetch route from backend API to bypass client permission issues
+    const orgId = (selectedChild as any).orgId || "org_1"
+    fetch(`/api/routes/list?organization_id=${orgId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled || !data.routes) return
+        const rData = data.routes.find((r: any) => r.id === selectedChild.routeDocId || r.route_name === selectedChild.route)
+        if (!rData) return
+
+        const rawStops: any[] = rData.stops || []
+        const startPoint = rData.start_point || ""
+        const endPoint = rData.end_point || ""
+
+        const allStops = [
+          ...(startPoint ? [{ name: startPoint.split(",")[0], lat: 0, lng: 0 }] : []),
+          ...rawStops.map((s: any) => ({
+            name: (s.name || s || "Stop").split(",")[0],
+            lat: s.lat || 0,
+            lng: s.lng || 0
+          })),
+          ...(endPoint && endPoint !== startPoint ? [{ name: endPoint.split(",")[0], lat: 0, lng: 0 }] : []),
+        ]
+
+        setRawStopsWithCoords(allStops)
+
+        // Initial render — will be overridden by vehicle listener
+        const mapped: RouteStop[] = allStops.map((s: any, idx: number) => {
+          const rawName = s.name || s.stop_name || `Stop ${idx + 1}`
+          const shortName = rawName.includes(",") ? rawName.split(",")[0].trim() : rawName
+          return {
+            name: shortName,
+            time: s.time || s.eta || "",
+            status: idx === 0 ? "completed" : idx === 1 ? "current" : "upcoming",
+          }
+        })
+        setRouteStops(mapped)
+      }).catch(err => {
+        console.error("Stops fetch error:", err)
+        if (!cancelled) setRouteStops([])
       })
-      setRouteStops(mapped)
-    }).catch(() => setRouteStops([]))
+
     return () => { cancelled = true }
-  }, [selectedChild?.routeDocId])
+  }, [selectedChild?.routeDocId, selectedChild?.id, selectedChild?.rawVehicleId, selectedChild?.route])
 
-  // ── Vehicle live-location listener → ETA alert to boarding_point ──────────
+  // ── Live vehicle listener: updates UI + writes ETA alerts ─────────────────
   useEffect(() => {
-    if (!selectedChild) return
-    // Resolve the vehicle doc ID (selectedChild.vehicle is the plate number; we need the raw ID)
-    // We stored the raw vehicle_id in resolveStudentData; use the student doc to get it
-    const phone = profile?.phone
-    if (!phone) return
+    if (!liveVehicleId || !selectedChild) return
+    const phone = profile?.phone || ""
 
-    // Must have boarding_point with lat/lng to compute ETA
-    const haversineKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
-      const R = 6371
-      const dLat = (lat2 - lat1) * Math.PI / 180
-      const dLng = (lng2 - lng1) * Math.PI / 180
-      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-    }
+    const unsub = onSnapshot(doc(db, "vehicles", liveVehicleId), async (vSnap) => {
+      if (!vSnap.exists()) return
+      const vData = vSnap.data()
+      const vLat: number | null = vData.lat || vData.latitude || vData.current_lat || null
+      const vLng: number | null = vData.lng || vData.longitude || vData.current_lng || null
+      const rawSpeed: number = vData.speed ?? null  // m/s from GPS, or km/h if driver sets it
+      // Normalise speed: if GPS provides m/s (usually <20 for buses), convert to km/h
+      const speedKmh: number | null = rawSpeed !== null
+        ? (rawSpeed < 50 ? Math.round(rawSpeed * 3.6) : Math.round(rawSpeed))  // <50 = m/s
+        : null
+      const status = (vData.status || "").toLowerCase()
+      const vehicleCurrentStop: string = vData.current_stop || ""
 
-    // Get the raw student doc to find vehicle_id and boarding_point
-    let unsubVehicle: (() => void) | null = null
-    getDoc(doc(db, "students", selectedChild.id)).then(studentSnap => {
-      if (!studentSnap.exists()) return
-      const studentData = studentSnap.data()
-      const vehicleId = studentData.vehicle_id
-      const boardingPoint = studentData.boarding_point as { name: string; lat: number; lng: number } | null
+      // ── Update route stop progress from vehicle's current_stop ────────────
+      if (rawStopsWithCoords.length > 0) {
+        const shortName = (s: any, i: number) => {
+          const n = s.name || s.stop_name || `Stop ${i + 1}`
+          return n.includes(",") ? n.split(",")[0].trim() : n
+        }
+        // Find which idx the vehicle is at by matching current_stop name
+        let currentIdx = -1
+        if (vehicleCurrentStop) {
+          currentIdx = rawStopsWithCoords.findIndex((s, i) => {
+            const sn = shortName(s, i).toLowerCase()
+            return vehicleCurrentStop.toLowerCase().includes(sn) || sn.includes(vehicleCurrentStop.toLowerCase())
+          })
+        }
+        const mapped: RouteStop[] = rawStopsWithCoords.map((s: any, idx: number) => ({
+          name: shortName(s, idx),
+          time: s.time || s.eta || "",
+          status: currentIdx < 0
+            ? (idx === 0 ? "completed" : idx === 1 ? "current" : "upcoming")
+            : idx < currentIdx ? "completed"
+            : idx === currentIdx ? "current"
+            : "upcoming",
+        }))
+        setRouteStops(mapped)
+      }
 
-      if (!vehicleId || vehicleId === "Unassigned" || !boardingPoint?.lat) return
+      // ── Determine next stop ───────────────────────────────────────────────
+      const currentRouteStopNames = rawStopsWithCoords.map((s: any, i: number) => {
+        const n = s.name || s.stop_name || `Stop ${i + 1}`
+        return n.includes(",") ? n.split(",")[0].trim() : n
+      })
+      let currentIdx2 = vehicleCurrentStop
+        ? currentRouteStopNames.findIndex(n => vehicleCurrentStop.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(vehicleCurrentStop.toLowerCase()))
+        : -1
+      const nextStopName = currentIdx2 >= 0 && currentIdx2 < currentRouteStopNames.length - 1
+        ? currentRouteStopNames[currentIdx2 + 1]
+        : (currentRouteStopNames[1] || "")
 
-      let lastAlertEta: number | null = null
-      const ALERT_RADIUS_KM = 2
+      // ── ETA to next stop ──────────────────────────────────────────────────
+      let etaMinutes: number | null = null
+      if (vLat && vLng && speedKmh && speedKmh > 0) {
+        const nextStopObj = rawStopsWithCoords[currentIdx2 >= 0 ? currentIdx2 + 1 : 1]
+        if (nextStopObj?.lat && nextStopObj?.lng) {
+          const dist = haversineKm(vLat, vLng, nextStopObj.lat, nextStopObj.lng)
+          etaMinutes = Math.max(1, Math.round((dist / speedKmh) * 60))
+        }
+      }
 
-      unsubVehicle = onSnapshot(doc(db, "vehicles", vehicleId), async (vSnap) => {
-        if (!vSnap.exists()) return
-        const vData = vSnap.data()
-        const vLat = vData.lat || vData.latitude || vData.current_lat
-        const vLng = vData.lng || vData.longitude || vData.current_lng
-        const speed = vData.speed || 30 // km/h fallback
-        const status = (vData.status || "").toLowerCase()
+      setVehicleData({
+        speed: speedKmh,
+        status,
+        currentStop: vehicleCurrentStop,
+        nextStop: nextStopName,
+        etaMinutes,
+        lat: vLat,
+        lng: vLng,
+      })
 
-        // Write trip_started alert when vehicle goes live
+      // ── ETA + trip_started alerts ─────────────────────────────────────────
+      if (phone) {
         if (["on_duty", "active", "moving"].includes(status)) {
           const startKey = `${selectedChild.id}_trip_started_${new Date().toDateString()}`
-          const existingStart = await getDoc(doc(db, "alerts", startKey))
-          if (!existingStart.exists()) {
-            await setDoc(doc(db, "alerts", startKey), {
-              type: "trip_started",
+          getDoc(doc(db, "alerts", startKey)).then(existing => {
+            if (!existing.exists()) {
+              setDoc(doc(db, "alerts", startKey), {
+                type: "trip_started",
+                student_id: selectedChild.id,
+                student_name: selectedChild.name,
+                parent_phone: phone,
+                title: "Trip Started",
+                description: `${selectedChild.name}'s bus (${selectedChild.vehicle}) has started the route.`,
+                created_at: serverTimestamp(),
+                read: false,
+              }).catch(() => {})
+            }
+          }).catch(() => {})
+        }
+
+        // Boarding point arrival alert
+        getDoc(doc(db, "students", selectedChild.id)).then(sSnap => {
+          if (!sSnap.exists()) return
+          const bp = sSnap.data().boarding_point as { name: string; lat: number; lng: number } | null
+          if (!bp?.lat || !vLat || !vLng) return
+          const dist = haversineKm(vLat, vLng, bp.lat, bp.lng)
+          if (dist <= 2) {
+            const etaMins = speedKmh && speedKmh > 0 ? Math.max(1, Math.round((dist / speedKmh) * 60)) : null
+            if (!etaMins) return
+            const alertKey = `${selectedChild.id}_arriving`
+            setDoc(doc(db, "alerts", alertKey), {
+              type: etaMins <= 2 ? "arriving" : "arriving_soon",
               student_id: selectedChild.id,
               student_name: selectedChild.name,
               parent_phone: phone,
-              title: "Trip Started",
-              description: `${selectedChild.name}'s bus (${selectedChild.vehicle}) has started the route.`,
+              title: etaMins <= 2 ? "Bus Arriving Now!" : `Bus in ~${etaMins} min`,
+              description: `${selectedChild.name}'s bus is about ${etaMins} min away from ${bp.name}. Get ready!`,
+              eta_minutes: etaMins,
+              boarding_stop: bp.name,
               created_at: serverTimestamp(),
               read: false,
-            })
+            }, { merge: true }).catch(() => {})
           }
-        }
+        }).catch(() => {})
+      }
+    })
 
-        if (!vLat || !vLng) return
-        const distKm = haversineKm(vLat, vLng, boardingPoint.lat, boardingPoint.lng)
-
-        if (distKm <= ALERT_RADIUS_KM) {
-          const etaMinutes = Math.max(1, Math.round((distKm / Math.max(speed, 5)) * 60))
-          // Only write a new alert if ETA changed by more than 1 min to avoid spam
-          if (lastAlertEta !== null && Math.abs(lastAlertEta - etaMinutes) < 2) return
-          lastAlertEta = etaMinutes
-
-          const alertKey = `${selectedChild.id}_arriving`
-          await setDoc(doc(db, "alerts", alertKey), {
-            type: etaMinutes <= 2 ? "arriving" : "arriving_soon",
-            student_id: selectedChild.id,
-            student_name: selectedChild.name,
-            parent_phone: phone,
-            title: etaMinutes <= 2 ? "Bus Arriving Now!" : `Bus in ~${etaMinutes} min`,
-            description: `${selectedChild.name}'s bus is about ${etaMinutes} min away from your boarding stop (${boardingPoint.name}). Get ready!`,
-            eta_minutes: etaMinutes,
-            boarding_stop: boardingPoint.name,
-            created_at: serverTimestamp(),
-            read: false,
-          }, { merge: true })
-        } else {
-          lastAlertEta = null
-        }
-      })
-    }).catch(() => {})
-
-    return () => { unsubVehicle?.() }
-  }, [selectedChild?.id, profile?.phone])
+    return unsub
+  }, [liveVehicleId, selectedChild?.id, rawStopsWithCoords, profile?.phone])
 
   const handleSubmitRating = async () => {
     if (rating === 0) return
@@ -591,43 +715,75 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade, onSOS }: Parent
         )}
       </div>
 
-      {/* Trip Info Cards */}
+      {/* Trip Info Cards — live from vehicle Firestore doc */}
       <div className="mx-4 mt-4 rounded-2xl border border-border bg-card p-4 shadow-sm">
         <div className="grid grid-cols-2 gap-4">
+          {/* Speed */}
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
               <Gauge className="h-5 w-5 text-primary" />
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Speed</p>
-              <p className="text-sm font-semibold text-foreground">42 km/h</p>
+              <p className="text-sm font-semibold text-foreground">
+                {vehicleData.speed !== null ? `${vehicleData.speed} km/h` : "—"}
+              </p>
             </div>
           </div>
+          {/* Next Stop */}
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success/10">
               <MapPin className="h-5 w-5 text-success" />
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-muted-foreground">Next Stop</p>
-              <p className="text-sm font-semibold text-foreground">MG Road</p>
+              <p className="text-sm font-semibold text-foreground truncate">
+                {vehicleData.nextStop || routeStops.find(s => s.status === "current")?.name || "—"}
+              </p>
             </div>
           </div>
+          {/* ETA */}
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning/10">
               <Clock className="h-5 w-5 text-warning" />
             </div>
             <div>
               <p className="text-xs text-muted-foreground">ETA</p>
-              <p className="text-sm font-semibold text-foreground">8:42 AM</p>
+              <p className="text-sm font-semibold text-foreground">
+                {vehicleData.etaMinutes !== null ? `~${vehicleData.etaMinutes} min` : "—"}
+              </p>
             </div>
           </div>
+          {/* Status */}
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
-              <Navigation className="h-5 w-5 text-muted-foreground" />
+            <div className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-xl",
+              ["on_duty", "active", "moving"].includes(vehicleData.status) ? "bg-success/10"
+              : vehicleData.status === "off-duty" ? "bg-muted"
+              : "bg-muted"
+            )}>
+              <Navigation className={cn(
+                "h-5 w-5",
+                ["on_duty", "active", "moving"].includes(vehicleData.status) ? "text-success"
+                : "text-muted-foreground"
+              )} />
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Status</p>
-              <p className="text-sm font-semibold text-foreground">In Transit</p>
+              <p className={cn(
+                "text-sm font-semibold",
+                ["on_duty", "active", "moving"].includes(vehicleData.status) ? "text-success"
+                : vehicleData.status ? "text-foreground"
+                : "text-muted-foreground"
+              )}>
+                {vehicleData.status === "on_duty" || vehicleData.status === "active" || vehicleData.status === "moving"
+                  ? "In Transit"
+                  : vehicleData.status === "off-duty" || vehicleData.status === "off_duty"
+                  ? "Off Duty"
+                  : vehicleData.status
+                    ? vehicleData.status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+                    : "Not Active"}
+              </p>
             </div>
           </div>
         </div>
@@ -646,50 +802,6 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade, onSOS }: Parent
         </div>
       )}
 
-      {/* SOS Button */}
-      <button
-        onClick={() => setShowSosConfirm(true)}
-        className="fixed bottom-24 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-destructive shadow-lg shadow-destructive/30 transition-transform active:scale-95"
-        aria-label="SOS Emergency"
-      >
-        <AlertTriangle className="h-6 w-6 text-destructive-foreground" strokeWidth={2.5} />
-      </button>
-
-      {/* SOS Confirmation Sheet */}
-      {showSosConfirm && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/50 backdrop-blur-sm">
-          <div className="w-full max-w-md animate-in slide-in-from-bottom duration-300 rounded-t-3xl bg-card p-6 shadow-2xl">
-            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted" />
-            <div className="flex flex-col items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-                <AlertTriangle className="h-8 w-8 text-destructive" />
-              </div>
-              <h3 className="text-lg font-bold text-foreground">Emergency SOS</h3>
-              <p className="text-center text-sm text-muted-foreground">
-                This will immediately alert the school administration, driver, and local authorities. Are you sure?
-              </p>
-              <div className="flex w-full gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowSosConfirm(false)}
-                  className="h-12 flex-1 rounded-xl"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    setShowSosConfirm(false)
-                    onSOS?.()
-                  }}
-                  className="h-12 flex-1 rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                >
-                  Confirm SOS
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Driver Rating Modal */}
       {showRatingModal && (

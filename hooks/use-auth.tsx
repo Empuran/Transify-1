@@ -131,27 +131,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const loginMock = (role: UserRole, orgCategory?: OrgCategory, phone?: string, name?: string) => {
+        // Normalize phone: strip country code, spaces, dashes → 10-digit local number
+        const rawPhone = (phone || "").replace(/\s+/g, "").replace(/-/g, "")
+        const digits = rawPhone.replace(/^\+91/, "").replace(/^0/, "")
+        // Keep both: 10-digit for query fallback and +91 prefixed for Firestore exact match
+        const normalizedPhone = digits.length >= 10 ? digits.slice(-10) : rawPhone
+        const phoneWithCC = normalizedPhone.length === 10 ? `+91${normalizedPhone}` : rawPhone
+
         const displayName = name || (role === "driver" ? "Loading Driver..." : "Parent")
         const mockProfile: UserProfile = {
             id: "test_user_id",
-            phone: phone || "+919999999999",
+            phone: phoneWithCC || "+919999999999",    // Primary: +91XXXXXXXXXX — matches most Firestore entries
             globalName: displayName,
             orgCategory: orgCategory || "school",
             roles: { "org_123": role },
             activeOrgId: "org_123",
-            children: [
-                {
-                    id: "1",
-                    name: "Arya Sharma",
-                    school: "Delhi Public School, Koramangala",
-                    vehicle: "KA-01-AB-1234",
-                    driver: "Rajesh Kumar",
-                    route: "Route A12",
-                    status: "on-time"
-                }
-            ]
         }
-        setUser({ uid: "test_user_id", phoneNumber: phone || "+919999999999" } as FirebaseUser)
+        setUser({ uid: "test_user_id", phoneNumber: phoneWithCC || "+919999999999" } as FirebaseUser)
         setProfile(mockProfile)
         setActiveOrgId("org_123")
         setLoading(false)

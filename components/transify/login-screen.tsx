@@ -65,8 +65,11 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
   const handleVerifyPhoneOtp = () => {
     if (admin) {
       setStep("email")
+    } else if (assignedRole === "driver") {
+      // Drivers are pre-registered by admin — name is fetched from Firestore in driver-dashboard
+      onLogin(assignedRole, phone)
     } else {
-      // Check if we have a stored name for this phone number
+      // Check if we have a stored name for this phone number (parents)
       const storedName = typeof window !== "undefined"
         ? localStorage.getItem(`transify_parent_name_${phone.replace(/\s+/g, "")}`)
         : null

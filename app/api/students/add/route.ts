@@ -5,7 +5,8 @@ import { createAuditLog } from "@/lib/audit-logger";
 // POST /api/students/add — register a new student/employee
 export async function POST(req: NextRequest) {
     try {
-        const { name, grade, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name } = await req.json();
+        const body = await req.json();
+        const { name, grade, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name } = body;
 
         if (!name || !memberId || !organization_id) {
             return NextResponse.json(
@@ -20,6 +21,7 @@ export async function POST(req: NextRequest) {
             memberId: memberId.trim(),
             parent_phone: parentPhone || "",
             route: route || "Unassigned",
+            route_id: body.route_id || "",
             vehicle_id: vehicle_id || "Unassigned",
             organization: organization || "",
             organization_id,

@@ -19,6 +19,7 @@ export interface StudentData {
     memberId: string
     parentPhone: string
     route: string
+    route_id?: string
     vehicle_id: string
     organization: string
     boarding_point?: { name: string; lat: number; lng: number } | null
@@ -37,6 +38,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         memberId: initialData?.memberId || initialData?.student_id || "",
         parentPhone: initialData?.parentPhone || initialData?.parent_phone || "",
         route: initialData?.route || initialData?.route_name || "",
+        route_id: initialData?.route_id || "",
         vehicle_id: initialData?.vehicle_id || "",
         organization: initialData?.organization || "",
         boarding_point: initialData?.boarding_point || null,
@@ -249,7 +251,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                             {showRoute && (
                                 <div className="absolute z-10 mt-20 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-xl max-h-40 overflow-y-auto min-w-[160px]">
                                     {routeOptions.map((r) => (
-                                        <button key={r.name} onClick={() => { setData({ ...data, route: r.name, boarding_point: null }); setShowRoute(false) }}
+                                        <button key={r.name} onClick={() => { setData({ ...data, route: r.name, route_id: r.id || "", boarding_point: null }); setShowRoute(false) }}
                                             className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-left transition-colors", data.route === r.name ? "bg-primary/10 text-primary font-semibold" : "hover:bg-muted text-foreground")}>
                                             {data.route === r.name && <Check className="h-3 w-3 shrink-0" />}
                                             {r.name}
