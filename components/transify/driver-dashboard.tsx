@@ -171,6 +171,179 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   const normalize = (p: string) => p?.replace(/\D/g, '').slice(-10)
 
+  // ── Notify parent helper ─────────────────────────────────────────────────
+  const sendParentAlerts = useCallback(async (type: "trip_started" | "stop_reached" | "stop_departed" | "approaching" | "trip_end" | "delay" | "sos" | "reached_school" | "student_reached", nextStopIndex?: number, priority: "normal" | "warning" | "emergency" = "normal", customMessage?: string) => {
+    if (!resolvedOrgId || !currentRoute?.id) return
+
+    try {
+      // 1. Fetch all students on this route
+      const q = query(
+        collection(db, "students"),
+        where("organization_id", "==", resolvedOrgId),
+        where("route_id", "==", currentRoute.id)
+      )
+      const snap = await getDocs(q)
+      const students = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
+      
+      const vehiclePlate = selectedVehicle?.plate_number || "Unknown"
+      const morningEvening = tripDirection === "to-school" ? "morning" : "return"
+      const currentStopIndexLocal = nextStopIndex !== undefined ? nextStopIndex : currentStopIndex
+      const rawCurrentStop = dynamicStops[currentStopIndexLocal]
+      const currentStopName = typeof rawCurrentStop === "string" ? rawCurrentStop : (rawCurrentStop?.name || rawCurrentStop?.stop_name || "Unknown Stop")
+
+      for (const st of students) {
+        if (!st.parent_phone) continue
+        
+        // Normalize phone to match login profiles
+        const pPhone = normalize(st.parent_phone)
+        const formattedPhone = pPhone.length === 10 ? `+91${pPhone}` : st.parent_phone
+
+        let title = ""
+        let description = ""
+        let alertKeySuffix = ""
+        let current_priority = priority
+        let current_type: string = type
+
+        // Helper to find student's stop index in current route
+        const bPoint = st.boarding_point
+        const dPoint = st.dropoff_point
+        const boardingStr = typeof bPoint === "string" ? bPoint : (bPoint?.name || "")
+        const dropoffStr = typeof dPoint === "string" ? dPoint : (dPoint?.name || "")
+
+        const studentStopName = tripDirection === "to-school" ? boardingStr : dropoffStr
+        
+        // Use recursive helper to find student stop index
+        let studentStopIndex = dynamicStops.findIndex((s: any) => {
+          const sName = typeof s === "string" ? s : (s.name || s.stop_name || "")
+          const target = studentStopName?.toLowerCase() || "___none___"
+          const candidate = sName.toLowerCase()
+          return candidate.includes(target) || target.includes(candidate)
+        })
+
+        // Coordinate matching fallback
+        if (studentStopIndex === -1 && studentStopName) {
+           const target = tripDirection === "to-school" ? st.boarding_point : st.dropoff_point
+           if (target?.lat && target?.lng) {
+             studentStopIndex = dynamicStops.findIndex((s: any) => {
+               if (typeof s === "string") return false // Can't match coords on raw strings
+               if (!s.lat || !s.lng) return false
+               return Math.abs(s.lat - target.lat) < 0.002 && Math.abs(s.lng - target.lng) < 0.002
+             })
+           }
+        }
+
+        // Guard: For return trips, suppress all alerts after the student is dropped off
+        if (tripDirection === "from-school" && studentStopIndex !== -1 && currentStopIndexLocal > studentStopIndex) {
+          if (type !== "trip_end") continue
+        }
+
+        if (type === "trip_started") {
+          if (tripDirection === "to-school") {
+            title = "Bus Started Route"
+            description = `Bus ${vehiclePlate} has started the morning pickup route.`
+          } else {
+            title = "Bus Started Return Trip"
+            description = `Bus ${vehiclePlate} has started the return trip from school.`
+          }
+          alertKeySuffix = `${tripDirection}_trip_started_${new Date().toDateString()}`
+        } else if (type === "delay") {
+          title = "Bus Delay Notification"
+          description = `Bus ${vehiclePlate} is delayed due to ${customMessage || "traffic"}. Expected arrival time may be later than usual.`
+          alertKeySuffix = `delay_${new Date().getTime()}`
+          current_priority = "warning"
+        } else if (type === "sos") {
+          title = "Emergency SOS Alert"
+          description = `Emergency alert reported from Bus ${vehiclePlate}.`
+          alertKeySuffix = `sos_${new Date().getTime()}`
+          current_priority = "emergency"
+        } else if (type === "reached_school" && tripDirection === "to-school") {
+          title = "Bus Reached School"
+          description = `Bus ${vehiclePlate} has reached the school.`
+          alertKeySuffix = `${tripDirection}_reached_school_${new Date().toDateString()}`
+        } else if (type === "stop_reached") {
+          const diff = studentStopIndex !== -1 ? studentStopIndex - currentStopIndex : null
+          
+          if (diff === 2) {
+            current_type = "stops_away_2"
+            title = tripDirection === "to-school" ? "Bus Two Stops Away" : "Bus Two Stops Away From Drop Stop"
+            description = tripDirection === "to-school"
+              ? `Bus ${vehiclePlate} is two stops away from your pickup stop.`
+              : `Bus ${vehiclePlate} is two stops away from your child’s drop stop.`
+            alertKeySuffix = `${tripDirection}_stops_away_2_${studentStopIndex}_${new Date().toDateString()}`
+          } else if (diff === 1) {
+            current_type = "stops_away_1"
+            title = tripDirection === "to-school" ? "Bus One Stop Away" : "Bus One Stop Away From Drop Stop"
+            description = tripDirection === "to-school"
+              ? `Bus ${vehiclePlate} is one stop away from your pickup stop. Please be ready.`
+              : `Bus ${vehiclePlate} is one stop away from your child’s drop stop.`
+            alertKeySuffix = `${tripDirection}_stops_away_1_${studentStopIndex}_${new Date().toDateString()}`
+          } else if (diff === 0) {
+            // Reached destination
+            title = tripDirection === "to-school" ? "Bus Reached Pickup Stop" : "Trip Completed"
+            description = tripDirection === "to-school"
+              ? `Bus ${vehiclePlate} has reached your pickup stop.`
+              : `Bus ${vehiclePlate} has reached the drop-off point. Trip completed.`
+            alertKeySuffix = `${tripDirection}_stop_reached_${studentStopIndex}_${new Date().toDateString()}`
+          } else {
+            // General intermediate stop notification for all parents
+            current_type = "intermediate_stop_reached"
+            title = currentStopName ? `Bus Reached ${currentStopName}` : "Bus Reached Intermediate Stop"
+            description = `Bus ${vehiclePlate} has reached ${currentStopName || "the next stop"}.`
+            alertKeySuffix = `${tripDirection}_stop_reached_${currentStopIndexLocal}_${new Date().toDateString()}`
+          }
+        } else if (type === "stop_departed" && currentStopIndexLocal !== dynamicStops.length - 1) {
+          if (tripDirection === "to-school" && studentStopIndex === currentStopIndexLocal) {
+            // Specifically left the student's pickup stop
+            current_type = "stop_departed"
+            title = "Bus Left Pickup Stop"
+            description = `Bus ${vehiclePlate} has departed from your pickup stop.`
+            alertKeySuffix = `${tripDirection}_stop_departed_${currentStopIndexLocal}_${new Date().toDateString()}`
+          } else if (tripDirection === "from-school" && studentStopIndex === currentStopIndexLocal) {
+            // Student just got dropped off, we already send "Trip Completed" via student_reached
+            // Skip the generic "Bus Left Stop" for this parent
+            continue
+          } else {
+            // General intermediate departure notification
+            current_type = "intermediate_stop_departed"
+            title = currentStopName ? `Bus Left ${currentStopName}` : "Bus Left Intermediate Stop"
+            description = `Bus ${vehiclePlate} has departed from ${currentStopName || "the stop"}.`
+            alertKeySuffix = `${tripDirection}_stop_departed_${currentStopIndexLocal}_${new Date().toDateString()}`
+          }
+        } else if (type === "student_reached" && studentStopIndex === currentStopIndexLocal && tripDirection === "from-school") {
+          // Triggered when bus DEPARTS from the student's drop-off stop
+          title = "Trip Completed"
+          description = `Your child ${st.name} has been dropped off. Trip completed.`
+          alertKeySuffix = `${tripDirection}_student_reached_final_${studentStopIndex}_${new Date().toDateString()}`
+        } else if (type === "trip_end") {
+           title = "Trip Completed"
+           description = `The trip has successfully reached its final destination.`
+           alertKeySuffix = `${tripDirection}_trip_end_${new Date().getTime()}`
+        } else {
+          continue
+        }
+
+        const alertKey = `${st.id}_${alertKeySuffix}`
+        const alertRef = doc(db, "alerts", alertKey)
+        
+        setDoc(alertRef, {
+          type: current_type,
+          student_id: st.id,
+          student_name: st.name,
+          parent_phone: formattedPhone,
+          title,
+          description,
+          bus_number: vehiclePlate,
+          stop_name: currentStopName,
+          priority: current_priority,
+          created_at: serverTimestamp(),
+          read: false,
+        }, { merge: true }).catch(err => console.error("Error setting alert doc:", err))
+      }
+    } catch (e) {
+      console.error("Failed to send parent alerts:", e)
+    }
+  }, [resolvedOrgId, currentRoute?.id, dynamicStops, currentStopIndex, selectedVehicle?.plate_number, tripDirection])
+
   // ── Notify admin helper ──────────────────────────────────────────────────
   const notifyAdmin = useCallback((type: string, title: string, message: string, extra?: any) => {
     fetch("/api/notifications", {
@@ -195,111 +368,15 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       const status = type === "delay" ? "delayed" : "emergency"
       const vehicleRef = doc(db, "vehicles", selectedVehicle.id)
       updateDoc(vehicleRef, { status }).catch(e => console.error("Status update fail:", e))
-    }
-  }, [resolvedOrgId, realName, driverPhone, profile?.phone, selectedVehicle, currentRoute])
-
-  // ── Notify parent helper ─────────────────────────────────────────────────
-  const sendParentAlerts = useCallback(async (type: "trip_started" | "stop_reached" | "approaching" | "trip_end", nextStopIndex?: number) => {
-    if (!resolvedOrgId || !currentRoute?.id) return
-
-    try {
-      // 1. Fetch all students on this route
-      const q = query(
-        collection(db, "students"),
-        where("organization_id", "==", resolvedOrgId),
-        where("route_id", "==", currentRoute.id)
-      )
-      const snap = await getDocs(q)
-      const students = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
       
-      const currentStopName = dynamicStops[currentStopIndex]?.name || "Upcoming Stop"
-      const nextStopName = nextStopIndex !== undefined ? dynamicStops[nextStopIndex]?.name : null
-      
-      // Calculate ETA for approaching alerts
-      let calculatedEta: number | null = null
-      if (type === "approaching" && nextStopIndex !== undefined && location && location.latitude && location.longitude) {
-        const nextStop = geocodedStops[nextStopIndex]
-        if (nextStop && nextStop.lat && nextStop.lng) {
-          const dist = calcDistanceKm(location.latitude, location.longitude, nextStop.lat, nextStop.lng)
-          // Use current speed (min 15km/h for calculation if stopped)
-          const speed = Math.max(15, (location.speed || 0) * 3.6)
-          calculatedEta = Math.max(1, Math.round((dist / speed) * 60))
-        }
+      // Also notify parents
+      if (type === "sos") {
+        sendParentAlerts("sos", undefined, "emergency")
+      } else if (type === "delay") {
+        sendParentAlerts("delay", undefined, "warning", message)
       }
-
-      for (const st of students) {
-        if (!st.parent_phone) continue
-        
-        // Normalize phone to match login profiles
-        const pPhone = normalize(st.parent_phone)
-        const formattedPhone = pPhone.length === 10 ? `+91${pPhone}` : st.parent_phone
-
-        let title = ""
-        let description = ""
-        let alertKeySuffix = ""
-        let eta_minutes: number | null = null
-        let boarding_stop: string | null = null
-
-        if (type === "trip_started") {
-          title = "Trip Started"
-          description = `${st.name}'s bus (${selectedVehicle?.plate_number || "Unknown"}) has started the route.`
-          alertKeySuffix = `trip_started_${new Date().toDateString()}`
-        } else if (type === "trip_end") {
-          title = "Trip Completed"
-          description = `${st.name}'s bus has reached its destination.`
-          alertKeySuffix = `trip_end_${new Date().toDateString()}`
-        } else if (type === "stop_reached") {
-          title = "Bus at Stop"
-          description = `${st.name}'s bus has reached ${currentStopName}.`
-          alertKeySuffix = `stop_${currentStopIndex}_reached`
-        } else if (type === "approaching" && nextStopName) {
-          // Only alert if the NEXT stop roughly matches their boarding/dropoff point
-          const matchStop = (pointName: string) => {
-             const needle = nextStopName.split(',')[0].toLowerCase().trim()
-             const haystack = pointName.toLowerCase()
-             return haystack.includes(needle) || needle.includes(haystack)
-          }
-
-          if (tripDirection === "to-school" && st.boarding_point?.name && matchStop(st.boarding_point.name)) {
-            title = "Bus Approaching!"
-            description = `${st.name}'s bus is approaching ${nextStopName}. Please be ready to board.`
-            alertKeySuffix = `approaching_${nextStopIndex}`
-            eta_minutes = calculatedEta
-            boarding_stop = nextStopName.split(',')[0]
-          } else if (tripDirection === "from-school" && st.dropoff_point?.name && matchStop(st.dropoff_point.name)) {
-            title = "Bus Approaching Drop-off!"
-            description = `${st.name}'s bus is approaching ${nextStopName}.`
-            alertKeySuffix = `approaching_${nextStopIndex}`
-            eta_minutes = calculatedEta
-            boarding_stop = nextStopName.split(',')[0]
-          } else {
-            continue
-          }
-        } else {
-          continue
-        }
-
-        const alertKey = `${st.id}_${alertKeySuffix}`
-        const alertRef = doc(db, "alerts", alertKey)
-        
-        // Use merge: true so we don't overwrite if it already exists and prevents duplicates
-        setDoc(alertRef, {
-          type,
-          student_id: st.id,
-          student_name: st.name,
-          parent_phone: formattedPhone,
-          title,
-          description,
-          created_at: serverTimestamp(),
-          read: false,
-          eta_minutes,
-          boarding_stop,
-        }, { merge: true }).catch(err => console.error("Error setting alert doc:", err))
-      }
-    } catch (e) {
-      console.error("Failed to send parent alerts:", e)
     }
-  }, [resolvedOrgId, currentRoute?.id, dynamicStops, currentStopIndex, selectedVehicle?.plate_number, tripDirection, location, geocodedStops])
+  }, [resolvedOrgId, realName, driverPhone, profile?.phone, selectedVehicle, currentRoute, sendParentAlerts])
 
   // 1. Fetch driver info
   const fetchDriverInfo = useCallback(async () => {
@@ -552,9 +629,11 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       if (dist > 0.2 && isAtStop) {
         setIsAtStop(false)
         console.log(`🚌 Automatically departed from stop: ${currentStop.name}`)
+        sendParentAlerts("student_reached")
+        sendParentAlerts("stop_departed")
       }
     }
-  }, [location, currentStopIndex, dynamicStops, tripState, isAtStop, sendParentAlerts])
+  }, [location, currentStopIndex, dynamicStops, tripState, isAtStop, sendParentAlerts, geocodedStops])
 
 
   // GPS warmup — silently pre-acquire fix when component mounts so trip start is instant
@@ -650,11 +729,24 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   // The "Depart Stop" button is removed — progress is: Arrived → auto move to next stop.
   const handleArrived = () => {
     sendParentAlerts("stop_reached")
+    
+    // If this is the final stop and it's morning trip to school, send "Reached School" alert
+    if (currentStopIndex === totalStops - 1 && tripDirection === "to-school") {
+      sendParentAlerts("reached_school")
+    }
+
     if (currentStopIndex + 1 < totalStops) {
       sendParentAlerts("approaching", currentStopIndex + 1)
     }
 
     if (currentStopIndex < totalStops - 1) {
+      const departingIdx = currentStopIndex // Store current index before advancing
+      // Small timeout before "departure" to ensure "arrived" is seen first if they manual advance quickly
+      setTimeout(() => {
+        sendParentAlerts("student_reached", departingIdx)
+        sendParentAlerts("stop_departed", departingIdx)
+      }, 1000)
+      
       const nextIdx = currentStopIndex + 1
       setCurrentStopIndex(nextIdx)
       setIsAtStop(false)

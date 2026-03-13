@@ -26,6 +26,8 @@ export async function POST(req: NextRequest) {
             organization: organization || "",
             organization_id,
             status: "active",
+            boarding_point: body.boarding_point || null,
+            dropoff_point: body.dropoff_point || null,
             created_at: new Date().toISOString(),
         };
 

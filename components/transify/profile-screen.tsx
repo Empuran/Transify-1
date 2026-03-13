@@ -179,6 +179,19 @@ export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: 
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2) || "P"
   const phone = profile?.phone || ""
 
+  // Phone normalization helper
+  const phoneVariants = (p: string): string[] => {
+    const clean = p.replace(/\s+/g, "").replace(/-/g, "")
+    const digits10 = clean.replace(/^\+91/, "").replace(/^0/, "").slice(-10)
+    if (digits10.length !== 10) return [clean]
+    return [
+      `+91${digits10}`,
+      `+91 ${digits10}`,
+      `0${digits10}`,
+      digits10,
+    ]
+  }
+
   // Fetch real children from Firestore
   const [children, setChildren] = useState<ChildInfo[]>([])
   const [loadingChildren, setLoadingChildren] = useState(true)
@@ -188,9 +201,20 @@ export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: 
     const fetchChildren = async () => {
       setLoadingChildren(true)
       try {
-        const q = query(collection(db, "students"), where("parent_phone", "==", phone))
-        const snap = await getDocs(q)
-        const results: ChildInfo[] = await Promise.all(snap.docs.map(async (d) => {
+        const variants = phoneVariants(phone)
+        const allDocs: any[] = []
+        
+        // Fetch all possible phone number variations
+        for (const variant of variants) {
+          const q = query(collection(db, "students"), where("parent_phone", "==", variant))
+          const snap = await getDocs(q)
+          allDocs.push(...snap.docs)
+        }
+
+        // Deduplicate in case multiple variations matched the exact same document
+        const uniqueDocs = Array.from(new Map(allDocs.map(d => [d.id, d])).values())
+
+        const results: ChildInfo[] = await Promise.all(uniqueDocs.map(async (d) => {
           const data = d.data()
           let vehicle = data.vehicle_id || "Not Assigned"
           let route = data.route || "Not Assigned"

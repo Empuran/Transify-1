@@ -2,6 +2,10 @@
 
 import { Home, Route, Bell, User, BarChart3, Crown } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/hooks/use-auth"
+import { useState, useEffect } from "react"
+import { db } from "@/lib/firebase"
+import { collection, query, where, onSnapshot } from "firebase/firestore"
 
 export type ParentTab = "home" | "trips" | "alerts" | "reports" | "profile"
 
@@ -20,6 +24,55 @@ const tabs: { id: ParentTab; label: string; icon: typeof Home; premiumOnly?: boo
 ]
 
 export function BottomNav({ activeTab, onTabChange, isPremium = false }: BottomNavProps) {
+  const { profile } = useAuth()
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  // Phone normalization helper
+  const phoneVariants = (phone: string): string[] => {
+    const clean = phone.replace(/\s+/g, "").replace(/-/g, "")
+    const digits10 = clean.replace(/^\+91/, "").replace(/^0/, "").slice(-10)
+    if (digits10.length !== 10) return [clean]
+    return [
+      `+91${digits10}`,
+      `+91 ${digits10}`,
+      `0${digits10}`,
+      digits10,
+    ]
+  }
+
+  useEffect(() => {
+    if (!profile?.phone) return
+
+    const variants = phoneVariants(profile.phone)
+    const unsubscribers: Array<() => void> = []
+    
+    // We only need to know how many unread alerts exist
+    let unreadMap = new Map<string, number>()
+
+    const calculateTotal = () => {
+      let total = 0
+      unreadMap.forEach(count => total += count)
+      setUnreadCount(total)
+    }
+
+    variants.forEach(variant => {
+      const q = query(
+        collection(db, "alerts"),
+        where("parent_phone", "==", variant),
+        where("read", "==", false)
+      )
+      const unsub = onSnapshot(q, (snap) => {
+        unreadMap.set(variant, snap.docs.length)
+        calculateTotal()
+      })
+      unsubscribers.push(unsub)
+    })
+
+    return () => {
+      unsubscribers.forEach(u => u())
+    }
+  }, [profile?.phone])
+
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-50 bg-card/95 backdrop-blur-md border-t border-border"
@@ -52,6 +105,11 @@ export function BottomNav({ activeTab, onTabChange, isPremium = false }: BottomN
                   )}
                   strokeWidth={isActive ? 2.5 : 2}
                 />
+                {tab.id === "alerts" && unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground ring-2 ring-card animate-in zoom-in">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
                 {tab.premiumOnly && !isPremium && (
                   <Crown className="absolute -right-1.5 -top-1.5 h-3 w-3 text-gold" />
                 )}

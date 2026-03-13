@@ -15,28 +15,33 @@ import {
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/hooks/use-auth"
 import { db } from "@/lib/firebase"
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, limit } from "firebase/firestore"
+import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, limit } from "firebase/firestore"
 
 // ── Alert type icon helper ───────────────────────────────────────────────────
-function AlertIcon({ type }: { type: string }) {
+function AlertIcon({ type, priority }: { type: string, priority?: string }) {
   const t = (type || "").toLowerCase()
+  if (priority === "emergency" || t.includes("sos")) return <AlertTriangle className="h-5 w-5 text-white" />
   if (t.includes("trip_started") || t.includes("started")) return <Bus className="h-5 w-5 text-primary" />
-  if (t.includes("trip_end") || t.includes("completed")) return <CheckCircle2 className="h-5 w-5 text-success" />
-  if (t.includes("stop_reached")) return <MapPin className="h-5 w-5 text-success" />
+  if (t.includes("trip_end") || t.includes("completed") || t.includes("student_reached")) return <CheckCircle2 className="h-5 w-5 text-success" />
+  if (t.includes("stop_reached") || t.includes("arrived")) return <MapPin className="h-5 w-5 text-success" />
+  if (t.includes("stops_away")) return <Navigation className="h-5 w-5 text-primary" />
+  if (t.includes("stop_departed") || t.includes("departed")) return <Navigation className="h-5 w-5 text-primary rotate-45" />
   if (t.includes("approaching")) return <Navigation className="h-5 w-5 text-primary" />
   if (t.includes("delay")) return <Clock className="h-5 w-5 text-warning" />
-  if (t.includes("sos") || t.includes("emergency")) return <AlertTriangle className="h-5 w-5 text-destructive" />
+  if (t.includes("reached_school")) return <CheckCircle2 className="h-5 w-5 text-success" />
   return <Bell className="h-5 w-5 text-muted-foreground" />
 }
 
-function alertBg(type: string) {
+function alertBg(type: string, priority?: string) {
   const t = (type || "").toLowerCase()
+  if (priority === "emergency" || t.includes("sos")) return "bg-destructive shadow-lg shadow-destructive/30"
   if (t.includes("trip_started")) return "bg-primary/10"
-  if (t.includes("trip_end") || t.includes("completed")) return "bg-success/10"
-  if (t.includes("stop_reached")) return "bg-success/5"
+  if (t.includes("trip_end") || t.includes("completed") || t.includes("student_reached")) return "bg-success/10"
+  if (t.includes("stop_reached") || t.includes("arrived") || t.includes("stops_away")) return "bg-success/5"
+  if (t.includes("stop_departed") || t.includes("departed")) return "bg-primary/5"
   if (t.includes("approaching")) return "bg-primary/5"
   if (t.includes("delay")) return "bg-warning/10"
-  if (t.includes("sos") || t.includes("emergency")) return "bg-destructive/10"
+  if (t.includes("reached_school")) return "bg-success/10"
   return "bg-muted"
 }
 
@@ -71,9 +76,11 @@ export function ParentAlertsScreen() {
     const processSnapshot = () => {
       if (cancelled) return
       const sorted = [...allAlerts].sort((a, b) => {
-        const at = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at)
-        const bt = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at)
-        return bt.getTime() - at.getTime()
+        try {
+          const timeA = a.created_at?.toMillis ? a.created_at.toMillis() : (a.created_at?.seconds ? a.created_at.seconds * 1000 : 0)
+          const timeB = b.created_at?.toMillis ? b.created_at.toMillis() : (b.created_at?.seconds ? b.created_at.seconds * 1000 : 0)
+          return timeB - timeA
+        } catch { return 0 }
       })
       setAlerts(sorted.slice(0, 50))
       setLoading(false)
@@ -83,21 +90,49 @@ export function ParentAlertsScreen() {
       const q = query(
         collection(db, "alerts"),
         where("parent_phone", "==", variant),
-        orderBy("created_at", "desc"),
         limit(50)
       )
       const unsub = onSnapshot(q, (snap) => {
-        snap.docs.forEach(d => {
-          if (!seenAlertIds.has(d.id)) {
-            seenAlertIds.add(d.id)
-            allAlerts.push({ id: d.id, ...d.data() })
-          } else {
-            // Update existing
-            const idx = allAlerts.findIndex(a => a.id === d.id)
-            if (idx !== -1) allAlerts[idx] = { id: d.id, ...d.data() }
-          }
-        })
-        processSnapshot()
+        console.log(`[ParentAlerts] Variant ${variant} got ${snap.docs.length} alerts`)
+        
+        // Find existing alerts for this phone number variant
+        const variantAlerts = allAlerts.filter(a => a.parent_phone === variant)
+        
+        // If snapshot is empty, remove all alerts for this variant from our local cache
+        if (snap.empty) {
+          variantAlerts.forEach(va => {
+            const idx = allAlerts.findIndex(a => a.id === va.id)
+            if (idx !== -1) allAlerts.splice(idx, 1)
+            seenAlertIds.delete(va.id)
+          })
+        } else {
+          snap.docs.forEach(d => {
+            if (!seenAlertIds.has(d.id)) {
+              seenAlertIds.add(d.id)
+              allAlerts.push({ id: d.id, ...d.data() })
+            } else {
+              // Update existing
+              const idx = allAlerts.findIndex(a => a.id === d.id)
+              if (idx !== -1) allAlerts[idx] = { id: d.id, ...d.data() }
+            }
+          })
+          
+          // Remove alerts that were deleted remotely for this variant
+          const currentIds = new Set(snap.docs.map(d => d.id))
+          variantAlerts.forEach(va => {
+            if (!currentIds.has(va.id)) {
+               const idx = allAlerts.findIndex(a => a.id === va.id)
+               if (idx !== -1) allAlerts.splice(idx, 1)
+               seenAlertIds.delete(va.id)
+            }
+          })
+        }
+        
+        try {
+          processSnapshot()
+        } catch (err) {
+          console.error("[ParentAlerts] Error sorting alerts:", err)
+        }
       }, (err) => {
         console.warn("Alert query failed for variant:", variant, err)
       })
@@ -128,6 +163,23 @@ export function ParentAlertsScreen() {
     await Promise.all(unread.map(a => updateDoc(doc(db, "alerts", a.id), { read: true })))
   }
 
+  const clearAll = async () => {
+    if (!alerts.length) return
+    const confirmed = window.confirm("Are you sure you want to clear all notifications?")
+    if (!confirmed) return
+    
+    setLoading(true)
+    try {
+      const promises = alerts.map(a => deleteDoc(doc(db, "alerts", a.id)))
+      await Promise.all(promises)
+    } catch (e) {
+      console.error("Error clearing alerts", e)
+    } finally {
+      // Local state will update via snapshot
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="flex min-h-dvh flex-col bg-background pb-24">
       {/* Header */}
@@ -139,13 +191,21 @@ export function ParentAlertsScreen() {
               <p className="text-xs text-muted-foreground">{unreadCount} unread notification{unreadCount > 1 ? "s" : ""}</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             {unreadCount > 0 && (
               <button
                 onClick={markAllRead}
-                className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary"
+                className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors active:bg-primary/20"
               >
-                Mark all read
+                Mark read
+              </button>
+            )}
+            {alerts.length > 0 && (
+              <button
+                onClick={clearAll}
+                className="rounded-full bg-muted px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors active:bg-muted/80"
+              >
+                Clear all
               </button>
             )}
             <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
@@ -193,21 +253,49 @@ export function ParentAlertsScreen() {
             )}
           >
             {/* Icon */}
-            <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", alertBg(alert.type))}>
-              <AlertIcon type={alert.type} />
+            <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-transform active:scale-95", alertBg(alert.type, alert.priority))}>
+              <AlertIcon type={alert.type} priority={alert.priority} />
             </div>
-
+ 
             {/* Text */}
-            <div className="flex flex-1 flex-col gap-0.5 min-w-0">
+            <div className="flex flex-1 flex-col gap-1 min-w-0 py-0.5">
               <div className="flex items-start justify-between gap-2">
-                <span className={cn("text-sm font-semibold leading-snug text-foreground", !alert.read && "text-foreground")}>{alert.title}</span>
-                <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo(alert.created_at)}</span>
+                <div className="flex flex-col gap-0.5">
+                   <div className="flex items-center gap-2">
+                    <span className={cn("text-sm font-bold leading-snug text-foreground", !alert.read && "text-primary/90")}>{alert.title}</span>
+                    {alert.priority === "emergency" && (
+                      <span className="rounded-full bg-destructive px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-widest text-white animate-pulse">Emergency</span>
+                    )}
+                    {alert.priority === "warning" && (
+                      <span className="rounded-full bg-warning/20 px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-widest text-warning">Alert</span>
+                    )}
+                   </div>
+                   <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase tracking-tight mt-1">
+                     {alert.bus_number && (
+                       <span className="flex items-center gap-1">
+                         <Bus className="h-3 w-3" /> Bus {alert.bus_number}
+                       </span>
+                     )}
+                     {alert.stop_name && (
+                       <>
+                         <span>•</span>
+                         <span className="flex items-center gap-1">
+                           <MapPin className="h-3 w-3" /> {alert.stop_name}
+                         </span>
+                       </>
+                     )}
+                   </div>
+                </div>
+                <span className="shrink-0 text-[10px] font-medium text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">{timeAgo(alert.created_at)}</span>
               </div>
-              <p className="text-xs leading-relaxed text-muted-foreground">{alert.description}</p>
+              <p className="text-[13px] leading-relaxed text-muted-foreground/90 font-medium">{alert.description}</p>
               {alert.eta_minutes && (
-                <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold text-primary">
-                  <Clock className="h-3 w-3" />ETA ~{alert.eta_minutes} min · {alert.boarding_stop}
-                </span>
+                <div className="mt-2 flex items-center gap-2 rounded-lg bg-primary/5 p-2 border border-primary/10">
+                   <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10">
+                    <Clock className="h-3.5 w-3.5 text-primary" />
+                   </div>
+                   <span className="text-[11px] font-bold text-primary italic">ETA ~{alert.eta_minutes} min · {alert.boarding_stop}</span>
+                </div>
               )}
             </div>
 

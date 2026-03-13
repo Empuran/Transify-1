@@ -248,12 +248,17 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       collection(db, "alerts"),
       where("student_id", "==", selectedChild.id),
       where("type", "==", "trip_end"),
-      orderBy("created_at", "desc"),
-      limit(1)
+      limit(50) // Need to fetch more to sort locally
     )
     const unsub = onSnapshot(q, (snap) => {
       if (!snap.empty) {
-        const data = snap.docs[0].data()
+        // Sort manually to find newest
+        const sortedDocs = snap.docs.sort((a, b) => {
+          const timeA = a.data().created_at?.toMillis ? a.data().created_at.toMillis() : 0
+          const timeB = b.data().created_at?.toMillis ? b.data().created_at.toMillis() : 0
+          return timeB - timeA
+        })
+        const data = sortedDocs[0].data()
         // If alert is newer than 1 hour, show it
         const createdAt = data.created_at?.toDate ? data.created_at.toDate() : new Date()
         const diff = Date.now() - createdAt.getTime()
@@ -272,12 +277,16 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       collection(db, "alerts"),
       where("student_id", "==", selectedChild.id),
       where("type", "==", "trip_started"),
-      orderBy("created_at", "desc"),
-      limit(1)
+      limit(50) // Sort locally
     )
     const unsub = onSnapshot(q, (snap) => {
       if (!snap.empty) {
-        const data = snap.docs[0].data()
+        const sortedDocs = snap.docs.sort((a, b) => {
+          const timeA = a.data().created_at?.toMillis ? a.data().created_at.toMillis() : 0
+          const timeB = b.data().created_at?.toMillis ? b.data().created_at.toMillis() : 0
+          return timeB - timeA
+        })
+        const data = sortedDocs[0].data()
         const createdAt = data.created_at?.toDate ? data.created_at.toDate() : new Date()
         const diff = Date.now() - createdAt.getTime()
         if (diff < 3600000 && !data.read) {
@@ -608,7 +617,11 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
               <span className="text-sm font-semibold text-foreground">
                 {selectedChild?.name || (students.length ? "Select a student" : "Loading students...")}
               </span>
-              {selectedChild && <StatusBadge status={selectedChild.status} />}
+              {selectedChild && <StatusBadge status={
+                ["delayed", "emergency"].includes(vehicleData.status)
+                  ? (vehicleData.status as any)
+                  : selectedChild.status
+              } />}
             </div>
             <span className="text-xs text-muted-foreground">
               {selectedChild?.school || (students.length ? "Select to view status" : "Please wait")}
@@ -767,32 +780,6 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
               </span>
             </div>
           </div>
-          
-          {!isTripEnded && ["active", "on_duty", "moving"].includes(vehicleData.status) && (
-            <div className="relative flex h-10 w-10 items-center justify-center">
-              <svg className="h-10 w-10 -rotate-90">
-                <circle
-                  cx="20"
-                  cy="20"
-                  r="16"
-                  className="fill-none stroke-white/20 stroke-[3]"
-                />
-                <circle
-                  cx="20"
-                  cy="20"
-                  r="16"
-                  className="fill-none stroke-white stroke-[3] transition-all duration-1000"
-                  strokeDasharray={100}
-                  strokeDashoffset={100 - (vehicleData.progress || 0)}
-                  strokeLinecap="round"
-                />
-              </svg>
-              <div className="absolute flex flex-col items-center">
-                 <div className="h-1 w-2.5 rounded-full bg-white/40 mb-0.5" />
-                 <div className="h-1 w-2.5 rounded-full bg-white/40" />
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
