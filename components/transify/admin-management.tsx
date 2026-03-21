@@ -65,6 +65,11 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     // Tab
     const [activeTab, setActiveTab] = useState<"admins" | "audit">("admins")
 
+    // Ownership Transfer
+    const [showTransferModal, setShowTransferModal] = useState(false)
+    const [transferTargetId, setTransferTargetId] = useState<string>("")
+    const [pendingAction, setPendingAction] = useState<{ type: 'remove' | 'role', userId: string, newRole?: AdminRole } | null>(null)
+
     // Log Filtering & Pagination
     const [logStartDate, setLogStartDate] = useState("")
     const [logEndDate, setLogEndDate] = useState("")
@@ -72,6 +77,9 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     const logsPerPage = 10
 
     const isSuperAdmin = adminSession.role === "SUPER_ADMIN"
+    const activeAdmins = admins.filter(a => a.status === "ACTIVE")
+    const pendingInvites = admins.filter(a => a.status === "INVITED")
+    const superAdminCount = activeAdmins.filter(a => a.role === "SUPER_ADMIN").length
 
     // ── Fetch Data ──────────────────────────────────────────────────────
     const fetchAdmins = useCallback(async () => {
@@ -157,6 +165,13 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
     // ── Remove Admin ────────────────────────────────────────────────────
     const handleRemove = async (userId: string) => {
+        // Enforce transfer if only one super admin
+        if (userId === adminSession.user_id && isSuperAdmin && superAdminCount === 1) {
+            setPendingAction({ type: 'remove', userId })
+            setShowTransferModal(true)
+            return
+        }
+
         setActionLoading(userId)
         setError(null)
 
@@ -186,6 +201,13 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
     // ── Change Role ─────────────────────────────────────────────────────
     const handleChangeRole = async (userId: string, newRole: AdminRole) => {
+        // Enforce transfer if downgrading the only super admin
+        if (userId === adminSession.user_id && isSuperAdmin && superAdminCount === 1 && newRole !== "SUPER_ADMIN") {
+            setPendingAction({ type: 'role', userId, newRole })
+            setShowTransferModal(true)
+            return
+        }
+
         setActionLoading(userId)
         setError(null)
 
@@ -213,6 +235,65 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         }
     }
 
+    const handleTransferAndProceed = async () => {
+        if (!transferTargetId || !pendingAction) return
+        setInviting(true) // Reuse loading state for modal
+        setError(null)
+
+        try {
+            // 1. Transfer Super Admin role to selected user
+            const transferRes = await fetch("/api/admin/change-role", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_id: transferTargetId,
+                    new_role: "SUPER_ADMIN",
+                    changed_by_user_id: adminSession.user_id,
+                    organization_id: adminSession.organization_id,
+                }),
+            })
+            if (!transferRes.ok) throw new Error("Failed to assign new Super Admin")
+
+            // 2. Perform the pending original action
+            if (pendingAction.type === 'remove') {
+                const removeRes = await fetch("/api/admin/remove", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_id: pendingAction.userId,
+                        removed_by_user_id: transferTargetId, // New super admin removes the old one
+                        organization_id: adminSession.organization_id,
+                    }),
+                })
+                if (!removeRes.ok) throw new Error("Role transferred, but failed to remove your account")
+                showSuccess("Transfer successful. Your account has been removed.")
+                // Potentially force logout or redirect
+                setTimeout(() => window.location.href = "/admin/login", 2000)
+            } else if (pendingAction.type === 'role') {
+                const roleRes = await fetch("/api/admin/change-role", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_id: pendingAction.userId,
+                        new_role: pendingAction.newRole,
+                        changed_by_user_id: transferTargetId, // New super admin changes the old role
+                        organization_id: adminSession.organization_id,
+                    }),
+                })
+                if (!roleRes.ok) throw new Error("Role transferred, but failed to update your role")
+                showSuccess(`Transfer successful. You are now an ${pendingAction.newRole}.`)
+            }
+
+            setShowTransferModal(false)
+            setPendingAction(null)
+            await Promise.all([fetchAdmins(), fetchAuditLogs()])
+        } catch (err: any) {
+            setError(err.message)
+        } finally {
+            setInviting(false)
+        }
+    }
+
     const filteredAdmins = admins.filter(a => {
         if (a.status === "DISABLED") return false
         const email = a.email || ""
@@ -223,8 +304,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         return matchesSearch && matchesRole
     })
 
-    const activeAdmins = admins.filter(a => a.status === "ACTIVE")
-    const pendingInvites = admins.filter(a => a.status === "INVITED")
+
 
     // ── Audit action label ──────────────────────────────────────────────
     const actionLabel = (action: string) => {
@@ -235,6 +315,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
             login: "Logged in",
             ADMIN_LOGIN: "Logged in",
             ADMIN_LOGOUT: "Logged out",
+            ADMIN_ROLE_CHANGED: "Changed Role",
         }
         return map[action] || (action ? action.replaceAll("_", " ").toLowerCase() : "unknown action")
     }
@@ -243,7 +324,8 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         if (action === "add") return "text-success"
         if (action === "update") return "text-primary"
         if (action === "delete") return "text-destructive"
-        if (action === "login") return "text-primary"
+        if (action === "login" || action === "ADMIN_LOGIN") return "text-primary"
+        if (action === "ADMIN_ROLE_CHANGED") return "text-warning"
         return "text-muted-foreground"
     }
 
@@ -533,9 +615,34 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                                         )}
                                     </div>
 
-                                    {/* Actions (SUPER_ADMIN only, can't act on self or other SUPER_ADMINs) */}
-                                    {isSuperAdmin && admin.user_id !== adminSession.user_id && admin.role !== "SUPER_ADMIN" && (
+                                    {/* Actions (SUPER_ADMIN only, can't act on other SUPER_ADMINs unless transferring self) */}
+                                    {isSuperAdmin && (admin.user_id === adminSession.user_id || admin.role !== "SUPER_ADMIN") && (
                                         <div className="flex items-center gap-1">
+                                            {/* Role Toggles */}
+                                            {admin.user_id === adminSession.user_id && admin.role === "SUPER_ADMIN" ? (
+                                                <button
+                                                    onClick={() => handleChangeRole(admin.user_id, "ADMIN")}
+                                                    className="rounded-lg p-1.5 text-muted-foreground hover:bg-warning/10 hover:text-warning transition-colors"
+                                                    title="Downgrade your role to Admin"
+                                                >
+                                                    <Shield className="h-3.5 w-3.5" />
+                                                </button>
+                                            ) : (
+                                                admin.user_id !== adminSession.user_id && admin.role === "ADMIN" && (
+                                                    <button
+                                                        onClick={() => {
+                                                            if (confirm(`Promote ${admin.name || admin.email} to Super Admin? They will be able to manage other admins.`)) {
+                                                                handleChangeRole(admin.user_id, "SUPER_ADMIN")
+                                                            }
+                                                        }}
+                                                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-primary/20 hover:text-primary transition-colors"
+                                                        title="Promote to Super Admin"
+                                                    >
+                                                        <ShieldCheck className="h-3.5 w-3.5" />
+                                                    </button>
+                                                )
+                                            )}
+
                                             {confirmRemove === admin.user_id ? (
                                                 <div className="flex items-center gap-1">
                                                     <span className="text-[10px] text-destructive font-semibold">Confirm?</span>
@@ -717,6 +824,69 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                     )}
                 </div>
             </div>
+
+            {/* Ownership Transfer Modal */}
+            {showTransferModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-md animate-in fade-in zoom-in duration-200 rounded-3xl bg-card shadow-2xl flex flex-col overflow-hidden">
+                        <div className="flex items-center justify-between border-b border-border px-6 py-5 bg-warning/5">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning/10">
+                                    <ShieldCheck className="h-5 w-5 text-warning" />
+                                </div>
+                                <div>
+                                    <h2 className="text-base font-bold text-foreground">Transfer Ownership</h2>
+                                    <p className="text-[10px] font-bold text-warning uppercase tracking-widest">Action Required</p>
+                                </div>
+                            </div>
+                            <button onClick={() => { setShowTransferModal(false); setPendingAction(null) }}
+                                className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-muted transition-colors">
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div className="p-6 flex flex-col gap-4">
+                            <div className="rounded-xl bg-warning/5 border border-warning/20 p-4">
+                                <p className="text-sm text-foreground font-medium">
+                                    You are the only Super Admin. To {pendingAction?.type === 'remove' ? 'leave' : 'downgrade'}, you must assign another user as the new Super Admin.
+                                </p>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase">Select New Super Admin</label>
+                                <select 
+                                    value={transferTargetId}
+                                    onChange={(e) => setTransferTargetId(e.target.value)}
+                                    className="h-11 rounded-xl border border-border bg-background px-3 text-sm"
+                                >
+                                    <option value="">-- Choose an Admin --</option>
+                                    {admins
+                                        .filter(a => a.user_id !== adminSession.user_id && a.status === "ACTIVE")
+                                        .map(a => (
+                                            <option key={a.user_id} value={a.user_id}>{a.name} ({a.email})</option>
+                                        ))
+                                    }
+                                </select>
+                                {admins.filter(a => a.user_id !== adminSession.user_id && a.status === "ACTIVE").length === 0 && (
+                                    <p className="text-[10px] text-destructive font-medium mt-1">
+                                        No other active admins found. Please invite another admin first.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                        <div className="p-4 bg-muted/10 border-t border-border flex gap-3">
+                            <Button variant="outline" onClick={() => { setShowTransferModal(false); setPendingAction(null) }} className="flex-1 h-11 rounded-xl">Cancel</Button>
+                            <Button 
+                                onClick={handleTransferAndProceed}
+                                disabled={!transferTargetId || inviting}
+                                className="flex-1 h-11 rounded-xl bg-primary"
+                            >
+                                {inviting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+                                Confirm Transfer
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

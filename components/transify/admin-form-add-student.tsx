@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus, MapPin } from "lucide-react"
+import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus, MapPin, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -24,6 +24,7 @@ export interface StudentData {
     organization: string
     boarding_point?: { name: string; lat: number; lng: number } | null
     dropoff_point?: { name: string; lat: number; lng: number } | null
+    section?: string
 }
 
 const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
@@ -36,11 +37,12 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
     const [data, setData] = useState<StudentData>({
         name: initialData?.name || "",
         grade: initialData?.grade || initialData?.dept || initialData?.department || "",
+        section: initialData?.section || "", // Initialized section
         memberId: initialData?.memberId || initialData?.student_id || "",
-        parentPhone: initialData?.parentPhone || initialData?.parent_phone || "",
-        route: initialData?.route || initialData?.route_name || "",
+        parentPhone: initialData?.parent_phone || initialData?.student_phone || initialData?.phone || "", // Updated parentPhone initialization
+        route: initialData?.route || initialData?.route_name || "Unassigned", // Updated route initialization
         route_id: initialData?.route_id || "",
-        vehicle_id: initialData?.vehicle_id || "",
+        vehicle_id: initialData?.vehicle_id || "Unassigned", // Updated vehicle_id initialization
         organization: initialData?.organization || "",
         boarding_point: initialData?.boarding_point || null,
         dropoff_point: initialData?.dropoff_point || null,
@@ -52,6 +54,7 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
     const [showBoarding, setShowBoarding] = useState(false)
     const [showDropoff, setShowDropoff] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [loading, setLoading] = useState(false)
     const [routeOptions, setRouteOptions] = useState<RouteOption[]>([])
     const [vehicleOptions, setVehicleOptions] = useState<{ id: string; plate: string }[]>([])
 
@@ -109,7 +112,8 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     setVehicleOptions([{ id: "Unassigned", plate: "Unassigned" }, ...vMap])
                 }
             }).catch(() => { })
-    }, [])
+
+    }, [isCorporate])
 
     // When route changes, update boarding stop options
     useEffect(() => {
@@ -126,16 +130,21 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         }
     }, [data.route, routeOptions])
 
-    const isValid = data.name.trim() && data.grade && data.memberId.trim() && data.parentPhone.trim() && data.route
+    const isValid = data.name.trim() && (initialData?.id ? data.memberId.trim() : true) && data.parentPhone.trim() && data.route
 
     const handleSave = async () => {
         if (!isValid) return
+        setLoading(true)
 
         const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
         const adminData = session ? JSON.parse(session) : null
         const orgId = adminData?.organization_id
 
-        if (!orgId) { alert("Organization not found. Please log in again."); return }
+        if (!orgId) { 
+            alert("Organization not found. Please log in again.")
+            setLoading(false)
+            return 
+        }
 
         try {
             const isEditing = !!initialData?.id
@@ -154,9 +163,11 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
             if (!res.ok) throw new Error(result.error)
 
             setSaved(true)
-            setTimeout(() => { onSave(data); onClose() }, 800)
+            setTimeout(() => { onSave(data); onClose() }, 1500) // Longer delay to see the generated ID
         } catch (err: any) {
             alert(err.message || `Failed to ${initialData ? "update" : "add"} member`)
+        } finally {
+            setLoading(false)
         }
     }
 
@@ -196,14 +207,14 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     {/* Grade / Department Picker */}
                     <div className="flex flex-col gap-1.5">
                         <label className="text-sm font-semibold text-foreground">{isCorporate ? "Department" : "Class / Grade"}</label>
-                        <div className={cn("grid gap-2", isCorporate ? "" : "grid-cols-2")}>
+                        <div className={cn("grid gap-2", isCorporate ? "grid-cols-1" : "grid-cols-2")}>
                             <button onClick={() => setShowGrade(!showGrade)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
-                                <span className={cn("text-sm", data.grade ? "text-foreground" : "text-muted-foreground")}>{isCorporate ? (data.grade || "Select department") : (data.grade.split(" - ")[0] || "Select class")}</span>
+                                <span className={cn("text-sm", data.grade ? "text-foreground" : "text-muted-foreground")}>{isCorporate ? (data.grade || "Select department") : (data.grade || "Select class")}</span>
                                 <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showGrade && "rotate-180")} />
                             </button>
                             {!isCorporate && (
                                 <button onClick={() => setShowSection(!showSection)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
-                                    <span className={cn("text-sm", data.grade.includes(" - ") ? "text-foreground" : "text-muted-foreground")}>{data.grade.includes(" - ") ? `Section ${data.grade.split(" - ")[1]}` : "Section"}</span>
+                                    <span className={cn("text-sm", data.section ? "text-foreground" : "text-muted-foreground")}>{data.section ? `Section ${data.section}` : "Section"}</span>
                                     <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showSection && "rotate-180")} />
                                 </button>
                             )}
@@ -212,29 +223,31 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                             <div className="mt-1 grid grid-cols-3 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {(isCorporate ? deptOptions : gradeOptions).map((g) => (
                                     <button key={g} onClick={() => { setData({ ...data, grade: g }); setShowGrade(false) }}
-                                        className={cn("rounded-lg py-2 text-xs font-medium transition-colors", (data.grade === g || data.grade.startsWith(g)) ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{g}</button>
+                                        className={cn("rounded-lg py-2 text-xs font-medium transition-colors", data.grade === g ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{g}</button>
                                 ))}
                             </div>
                         )}
                         {!isCorporate && showSection && (
                             <div className="mt-1 grid grid-cols-7 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((s) => (
-                                    <button key={s} onClick={() => { const base = data.grade.split(" - ")[0] || ""; setData({ ...data, grade: base ? `${base} - ${s}` : s }); setShowSection(false) }}
-                                        className={cn("rounded-lg py-2 text-xs font-bold transition-colors", data.grade.endsWith(` - ${s}`) ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{s}</button>
+                                    <button key={s} onClick={() => { setData({ ...data, section: s }); setShowSection(false) }}
+                                        className={cn("rounded-lg py-2 text-xs font-bold transition-colors", data.section === s ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{s}</button>
                                 ))}
                             </div>
                         )}
                     </div>
 
                     {/* Member ID & Parent Phone */}
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-semibold text-foreground">Member ID</label>
-                            <div className="relative">
-                                <Hash className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                                <Input placeholder="MBR-001" value={data.memberId} onChange={(e) => setData({ ...data, memberId: e.target.value })} className="h-12 rounded-xl bg-background pl-9" />
+                    <div className={cn("grid gap-3", initialData?.id ? "grid-cols-2" : "grid-cols-1")}>
+                        {!!initialData?.id && (
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-semibold text-foreground">Member ID</label>
+                                <div className="relative">
+                                    <Hash className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                    <Input placeholder="MBR-001" value={data.memberId} onChange={(e) => setData({ ...data, memberId: e.target.value })} className="h-12 rounded-xl bg-background pl-9 pr-10" />
+                                </div>
                             </div>
-                        </div>
+                        )}
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-semibold text-foreground">{isCorporate ? "Employee Phone" : "Parent Phone"}</label>
                             <div className="relative">
@@ -373,10 +386,19 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     {/* Save Button */}
                     <Button
                         onClick={handleSave}
-                        disabled={!isValid}
+                        disabled={!isValid || loading || saved}
                         className={cn("h-14 rounded-xl font-bold text-base mt-1 transition-all", saved ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground")}
                     >
-                        {saved ? <><Check className="mr-2 h-5 w-5" />{isCorporate ? "Employee Added!" : "Student Added!"}</> : isCorporate ? "Save Employee" : "Save Student"}
+                        {saved ? (
+                            <div className="flex items-center gap-2">
+                                <Check className="h-5 w-5" />
+                                {isCorporate ? "Employee Added!" : "Student Added!"}
+                            </div>
+                        ) : loading ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                            initialData?.id ? "Update Member" : (isCorporate ? "Save Employee" : "Save Student")
+                        )}
                     </Button>
                 </div>
             </div>

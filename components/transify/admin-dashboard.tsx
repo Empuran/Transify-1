@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
-import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore"
+import { collection, onSnapshot, query, where, orderBy, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp, addDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { AddStudentForm } from "./admin-form-add-student"
 import { AddDriverForm } from "./admin-form-add-driver"
@@ -35,14 +35,14 @@ type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
 // ── Status Badge ──────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
-  const s = status.toLowerCase()
+  const s = status.toLowerCase().replace(/[-_ ]/g, "-") // Normalize to hyphen-separated
   const isSuccess = ["on-time", "on-duty", "at-school", "active", "online"].includes(s)
   const isWarning = ["delayed", "idle"].includes(s)
   const isDanger = ["emergency", "sos", "offline"].includes(s)
   const isPrimary = ["on-bus", "in-progress", "moving"].includes(s)
   const isMuted = ["off-duty", "completed", "stationary"].includes(s)
 
-  // Capitalize each word
+  // Capitalize each word for label
   const label = status.split(/[-_ ]/)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ")
@@ -201,11 +201,15 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
 
 
 // ── Vehicle Icon Helper ────────────────────────────────────────────────────
-const getVehicleIcon = (type: string = "") => {
+const getVehicleIcon = (type: string = "", capacity: number | string = 0) => {
   const t = type.toLowerCase()
+  const cap = typeof capacity === 'string' ? parseInt(capacity, 10) : capacity
+  
+  if (t.includes("shuttle")) {
+    return cap > 7 ? Bus : Car
+  }
   if (t.includes("car")) return Car
-  if (t.includes("van")) return Truck
-  if (t.includes("mini") || t.includes("shuttle")) return Truck
+  if (t.includes("van") || t.includes("mini")) return Bus
   return Bus
 }
 
@@ -218,6 +222,7 @@ export function AdminDashboard() {
   // ── Editing States ──────────────────────────────────────────────────────
   const [editingDriver, setEditingDriver] = useState<any>(null)
   const [editingVehicle, setEditingVehicle] = useState<any>(null)
+  const [selectedVehicleCompliance, setSelectedVehicleCompliance] = useState<any>(null)
   const [editingRoute, setEditingRoute] = useState<any>(null)
   const [editingStudent, setEditingStudent] = useState<any>(null)
 
@@ -227,7 +232,7 @@ export function AdminDashboard() {
   // ── Notifications ───────────────────────────────────────────────────────
   const [notifications, setNotifications] = useState<any[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
-
+  const [showProfileDropdown, setShowProfileDropdown] = useState(false)
   const [dashboardDateEnd, setDashboardDateEnd] = useState<string>("")
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -235,6 +240,7 @@ export function AdminDashboard() {
   const [selectedDriverForReviews, setSelectedDriverForReviews] = useState<any>(null)
   const [driverReviews, setDriverReviews] = useState<any[]>([])
   const [loadingReviews, setLoadingReviews] = useState(false)
+  const [liveRole, setLiveRole] = useState<string | null>(null)
 
   // ── Report Date-Range Filter Modal ───────────────────────────────────────
   type ReportType = "delay" | "driver" | "route" | null
@@ -289,7 +295,7 @@ export function AdminDashboard() {
   // Use admin session data if available, fallback to profile
   const userName = adminSession?.name || profile?.globalName || "Test User"
   const userEmail = adminSession?.email || profile?.email || ""
-  const adminRole = adminSession?.role || "ADMIN"
+  const adminRole = liveRole || adminSession?.role || "ADMIN"
   const isSuperAdmin = adminRole === "SUPER_ADMIN"
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
 
@@ -309,10 +315,25 @@ export function AdminDashboard() {
     document.body.removeChild(a)
   }
 
+  // ── Live Role Listener ──────────────────────────────────────────────────
+  useEffect(() => {
+    const userId = adminSession?.user_id
+    if (!userId) return
+    const unsub = onSnapshot(doc(db, "admin_users", userId), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data()
+        if (data.role !== liveRole) {
+          setLiveRole(data.role)
+        }
+      }
+    })
+    return () => unsub()
+  }, [adminSession?.user_id, liveRole])
+
   // ── Member Filters ──────────────────────────────────────────────────────
   const [memberSearch, setMemberSearch] = useState("")
   const [memberRouteFilter, setMemberRouteFilter] = useState("all")
-  const [memberStatusFilter, setMemberStatusFilter] = useState("all")
+  const [memberSectionFilter, setMemberSectionFilter] = useState("all")
   const [memberGradeFilter, setMemberGradeFilter] = useState("all")
   const [studentsData, setStudentsData] = useState<any[]>([])
 
@@ -339,16 +360,24 @@ export function AdminDashboard() {
     const name = (s.name || "").toLowerCase()
     const memberId = (s.memberId || s.student_id || s.id || "").toLowerCase()
     const route = s.route || s.route_name || ""
-    const status = s.status || "active"
-    const grade = isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")
+    const gradeString = isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")
     const search = memberSearch.toLowerCase()
+    
+    // Section logic: use new explicit section field, fallback to extracting from grade string (e.g. "Class 4 - Z" -> "Z")
+    let section = "None"
+    if (s.section) {
+      section = s.section
+    } else if (gradeString.includes(" - ")) {
+      section = gradeString.split(" - ")[1].trim()
+    }
+
     return (
       (!search || name.includes(search) || memberId.includes(search)) &&
       (memberRouteFilter === "all" || route.includes(memberRouteFilter)) &&
-      (memberStatusFilter === "all" || status === memberStatusFilter) &&
-      (memberGradeFilter === "all" || grade === memberGradeFilter)
+      (memberSectionFilter === "all" || section === memberSectionFilter) &&
+      (memberGradeFilter === "all" || gradeString.startsWith(memberGradeFilter))
     )
-  }), [studentsData, memberSearch, memberRouteFilter, memberStatusFilter, memberGradeFilter, isCorporate])
+  }), [studentsData, memberSearch, memberRouteFilter, memberSectionFilter, memberGradeFilter, isCorporate])
 
   // ── Driver Filters ──────────────────────────────────────────────────────
   const [driverSearch, setDriverSearch] = useState("")
@@ -444,7 +473,7 @@ export function AdminDashboard() {
 
   const filteredVehicles = useMemo(() => vehiclesData.filter((v: any) => {
     const searchMatch = (v.plate_number || v.id || "").toLowerCase().includes(vehicleSearch.toLowerCase()) || (v.driver_name || "").toLowerCase().includes(vehicleSearch.toLowerCase())
-    const statusMatch = vehicleStatusFilter === "all" || v.status === vehicleStatusFilter
+    const statusMatch = vehicleStatusFilter === "all" || (v.status || "").toLowerCase().replace(/[-_ ]/g, "-") === vehicleStatusFilter
     const typeMatch = vehicleTypeFilter === "all" || v.type === vehicleTypeFilter
     const routeMatch = vehicleRouteFilter === "all" || (v.route_name || v.route || "").includes(vehicleRouteFilter)
     
@@ -548,22 +577,215 @@ export function AdminDashboard() {
     }
   }, [notifications, dashboardDate, dashboardDateEnd])
 
-  // Notifications visible in bell panel — hidden after user taps "Clear all"
-  const [panelClearedAt, setPanelClearedAt] = useState<number>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("transify_panel_cleared_at")
-      return saved ? parseInt(saved, 10) : 0
-    }
-    return 0
-  })
-  const handleClearNotifications = () => {
-    const now = Date.now()
-    setPanelClearedAt(now)
-    if (typeof window !== "undefined") localStorage.setItem("transify_panel_cleared_at", now.toString())
+  // ── Notifications Logic ───────────────────────────────────────────────────
+  const formatNotifDate = (ts: any) => {
+    if (!ts) return "—"
+    let d: Date
+    if (ts.toMillis) d = new Date(ts.toMillis())
+    else if (ts.seconds) d = new Date(ts.seconds * 1000)
+    else d = new Date(ts)
+    
+    if (isNaN(d.getTime())) return "—"
+    return `${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
   }
-  const panelNotifications = useMemo(() =>
-    notifications.filter((n: any) => new Date(n.timestamp || 0).getTime() > panelClearedAt)
-    , [notifications, panelClearedAt])
+
+  const markAsRead = async (notifId: string) => {
+    try {
+      await updateDoc(doc(db, "notifications", notifId), { is_read: true })
+    } catch (err) {
+      console.error("Mark as read error:", err)
+    }
+  }
+
+  const handleClearAll = async () => {
+    const orgId = adminSession?.organization_id
+    if (!orgId || notifications.length === 0) return
+    if (!confirm("Are you sure you want to clear all notifications?")) return
+
+    try {
+      const batch = writeBatch(db)
+      notifications.forEach(n => {
+        if (!n.is_cleared) {
+          batch.update(doc(db, "notifications", n.id), { 
+            is_cleared: true,
+            cleared_at: serverTimestamp() 
+          })
+        }
+      })
+      await batch.commit()
+      showToast("Notifications cleared")
+    } catch (err) {
+      console.error("Clear all error:", err)
+    }
+  }
+
+  const badgeCount = useMemo(() => 
+    notifications.filter((n: any) => !n.is_cleared && !n.is_read && (n.priority === 'warning' || n.priority === 'critical')).length
+  , [notifications])
+
+  const sortedNotifications = useMemo(() => {
+    return notifications
+      .filter((n: any) => !n.is_cleared)
+      .sort((a: any, b: any) => {
+        // Unread first, then by priority, then by timestamp
+        if (a.is_read !== b.is_read) return a.is_read ? 1 : -1
+        const pMap: any = { critical: 3, warning: 2, info: 1 }
+        if (pMap[a.priority] !== pMap[b.priority]) return pMap[b.priority] - pMap[a.priority]
+        const getT = (ts: any) => {
+          if (!ts) return 0
+          if (typeof ts === 'number') return ts
+          if (ts.toMillis) return ts.toMillis()
+          if (ts.seconds) return ts.seconds * 1000
+          return new Date(ts).getTime() || 0
+        }
+        return getT(b.timestamp) - getT(a.timestamp)
+      })
+  }, [notifications])
+
+  // ── Proactive Alerting Logic ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!adminSession?.organization_id || vehiclesData.length === 0) return
+
+    const checkAlerts = async () => {
+      const now = Date.now()
+      const orgId = adminSession.organization_id
+      const alertsToCreate: any[] = []
+
+      const dayAgo = now - 24 * 60 * 60 * 1000
+      const getT = (ts: any) => {
+        if (!ts) return 0
+        if (typeof ts === 'number') return ts
+        if (ts.toMillis) return ts.toMillis()
+        if (ts.seconds) return ts.seconds * 1000
+        return new Date(ts).getTime() || 0
+      }
+
+      vehiclesData.forEach((v: any) => {
+        const vId = v.id
+        const vPlate = v.plate_number || vId
+
+        // 1. Emergency SOS
+        if (v.status === 'emergency') {
+          const exists = notifications.some(n => n.vehicle_id === vId && n.type === 'sos' && getT(n.timestamp) > dayAgo)
+          if (!exists) {
+            alertsToCreate.push({
+              organization_id: orgId,
+              type: 'sos',
+              priority: 'critical',
+              title: 'Emergency SOS Alert',
+              message: `Vehicle ${vPlate} has triggered an SOS alert!`,
+              vehicle_id: vId,
+              vehicle_plate: vPlate,
+              timestamp: now,
+              is_read: false
+            })
+          }
+        }
+
+        // 2. GPS Offline (> 15 mins)
+        if (v.last_updated && (now - new Date(v.last_updated).getTime() > 15 * 60 * 1000)) {
+          // Only alert if vehicle has a driver (implies it should be active)
+          if (v.driver_id) {
+            const exists = notifications.some(n => n.vehicle_id === vId && n.type === 'gps_offline' && getT(n.timestamp) > dayAgo)
+            if (!exists) {
+              alertsToCreate.push({
+                organization_id: orgId,
+                type: 'gps_offline',
+                priority: 'warning',
+                title: 'GPS Signal Lost',
+                message: `Vehicle ${vPlate} has been offline for more than 15 minutes.`,
+                vehicle_id: vId,
+                vehicle_plate: vPlate,
+                timestamp: now,
+                is_read: false
+              })
+            }
+          }
+        }
+
+        // 3. Missing Driver Alert
+        if (!v.driver_id || !v.driver_name) {
+          const exists = notifications.some(n => n.vehicle_id === vId && n.type === 'missing_driver' && getT(n.timestamp) > dayAgo)
+          if (!exists) {
+            alertsToCreate.push({
+              organization_id: orgId,
+              type: 'missing_driver',
+              priority: 'warning',
+              title: 'Driver Not Assigned',
+              message: `Vehicle ${vPlate} does not have an active driver assigned today.`,
+              vehicle_id: vId,
+              vehicle_plate: vPlate,
+              timestamp: now,
+              is_read: false
+            })
+          }
+        }
+
+        // 4. Compliance Expiry
+        const checkDoc = (docType: string, expiry: string, label: string) => {
+          if (!expiry) return
+          const t = new Date(expiry).getTime()
+          const diff = t - now
+          const days = Math.ceil(diff / (1000 * 60 * 60 * 24))
+          
+          let priority: 'critical' | 'warning' | null = null
+          let msg = ""
+          
+          if (diff <= 0) {
+            priority = 'critical'
+            msg = `${label} for ${vPlate} has EXPIRED on ${new Date(expiry).toLocaleDateString()}.`
+          } else if (diff < 7 * 24 * 60 * 60 * 1000) {
+            priority = 'warning'
+            msg = `${label} for ${vPlate} expires in ${days} days (${new Date(expiry).toLocaleDateString()}).`
+          }
+
+          if (priority) {
+            const exists = notifications.some(n => n.vehicle_id === vId && n.document_type === docType && getT(n.timestamp) > dayAgo)
+            if (!exists) {
+              alertsToCreate.push({
+                organization_id: orgId,
+                type: 'compliance',
+                document_type: docType,
+                priority,
+                title: `${label} ${priority === 'critical' ? 'Expired' : 'Expiring Soon'}`,
+                message: msg,
+                vehicle_id: vId,
+                vehicle_plate: vPlate,
+                timestamp: now,
+                is_read: false
+              })
+            }
+          }
+        }
+
+        checkDoc('rc', v.rc_expiry, 'RC')
+        checkDoc('insurance', v.insurance_expiry, 'Insurance')
+        checkDoc('puc', v.puc_expiry, 'PUC')
+        checkDoc('fitness', v.fitness_expiry, 'Fitness Certificate')
+        checkDoc('permit', v.permit_expiry, 'Permit')
+      })
+
+      // Batch create notifications to avoid multiple triggers
+      if (alertsToCreate.length > 0) {
+        try {
+          // Take only first 5 to avoid spamming Firestore in one go (it will catch up in next run)
+          const subset = alertsToCreate.slice(0, 5)
+          for (const alert of subset) {
+            await addDoc(collection(db, "notifications"), {
+              ...alert,
+              timestamp: serverTimestamp()
+            })
+          }
+        } catch (err) {
+          console.error("Proactive alert creation error:", err)
+        }
+      }
+    }
+
+    // Run every 2 minutes or when data changes significantly
+    const timer = setTimeout(checkAlerts, 2000) 
+    return () => clearTimeout(timer)
+  }, [adminSession, vehiclesData, notifications])
 
   // Selected tile for drilldown drawer
   const [selectedTile, setSelectedTile] = useState<null | { title: string; items: any[]; type: string }>(null)
@@ -572,7 +794,7 @@ export function AdminDashboard() {
   const [trackStatus, setTrackStatus] = useState("all")
   const filteredTracking = useMemo(() => vehiclesData.filter((v: any) => {
     if (trackStatus === "all") return true
-    const s = (v.status || "").toLowerCase()
+    const s = (v.status || "").toLowerCase().replace(/[-_ ]/g, "-")
     // Group filters
     if (trackStatus === "on-duty") return ["on-duty", "on-time", "moving", "active", "in-progress", "in-transit"].includes(s)
     if (trackStatus === "off-duty") return ["off-duty", "idle", "stationary", "offline"].includes(s)
@@ -595,12 +817,12 @@ export function AdminDashboard() {
         { id: "drivers", label: "Drivers", icon: Users },
         { id: "vehicles", label: "Vehicles", icon: Bus },
         { id: "routes", label: "Routes", icon: Route },
+        ...(isSuperAdmin ? [
+          { id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck },
+          { id: "settings" as ActiveSection, label: "Settings", icon: Settings }
+        ] : []),
       ],
     },
-        { group: "System", items: [
-          ...(isSuperAdmin ? [{ id: "admins" as ActiveSection, label: "Admin Management", icon: ShieldCheck }] : []),
-          ...(isSuperAdmin ? [{ id: "settings" as ActiveSection, label: "Settings", icon: Settings }] : []),
-        ] },
   ]
 
   const sectionLabel = navGroups.flatMap(g => g.items).find(n => n.id === section)?.label ?? "Overview"
@@ -642,20 +864,16 @@ export function AdminDashboard() {
           ))}
         </nav>
 
-        <div className="border-t border-border p-3 space-y-1">
-          <div className="flex items-center gap-3 rounded-xl p-2">
+        <div className="border-t border-border p-3">
+          <div className="flex items-center gap-3 rounded-xl p-2 bg-muted/5">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
               <span className="text-xs font-bold text-primary">{initials}</span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-foreground truncate">{userName}</p>
-              <p className="text-[10px] text-muted-foreground">{isSuperAdmin ? "Super Admin" : "Admin"}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest leading-none mt-0.5">{isSuperAdmin ? "Super Admin" : "Admin"}</p>
             </div>
           </div>
-          <button onClick={handleLogout}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
-            <LogOut className="h-4 w-4" />Sign Out
-          </button>
         </div>
       </aside>
 
@@ -684,9 +902,9 @@ export function AdminDashboard() {
                 className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background hover:bg-muted transition-colors"
               >
                 <Bell className="h-4 w-4 text-foreground" />
-                {panelNotifications.filter((n: any) => !n.read).length > 0 && (
-                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white">
-                    {panelNotifications.length}
+                {badgeCount > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white ring-2 ring-background animate-in zoom-in">
+                    {badgeCount}
                   </span>
                 )}
               </button>
@@ -696,45 +914,101 @@ export function AdminDashboard() {
                   <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notifications</h3>
                     <button
-                      className="text-[10px] font-bold text-primary hover:underline"
-                      onClick={() => handleClearNotifications()}
+                      className="text-[10px] font-bold text-primary hover:underline transition-all active:scale-95"
+                      onClick={handleClearAll}
                     >Clear all</button>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
-                    {panelNotifications.map((n: any) => (
-                      <div key={n.id} className={cn("border-b border-border/50 px-4 py-3 transition-colors hover:bg-secondary/50",
-                        n.type === 'sos' ? 'bg-destructive/5' : n.type === 'delay' ? 'bg-warning/5' : ''
-                      )}>
+                    {sortedNotifications.map((n: any) => (
+                      <div 
+                        key={n.id} 
+                        onClick={() => !n.is_read && markAsRead(n.id)}
+                        className={cn("border-b border-border/50 px-4 py-3 transition-colors cursor-pointer group",
+                          !n.is_read ? (
+                            n.priority === 'critical' ? 'bg-destructive/5 hover:bg-destructive/10' : 
+                            n.priority === 'warning' ? 'bg-warning/5 hover:bg-warning/10' : 'bg-primary/5 hover:bg-primary/10'
+                          ) : 'hover:bg-muted/50 opacity-60'
+                        )}
+                      >
                         <div className="flex items-start gap-3">
-                          <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
-                            n.type === 'sos' ? 'bg-destructive/10 text-destructive' :
-                              n.type === 'delay' ? 'bg-warning/10 text-warning' : 'bg-primary/10 text-primary'
+                          <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg shadow-sm border",
+                            n.priority === 'critical' ? 'bg-destructive/10 border-destructive/20 text-destructive' :
+                            n.priority === 'warning' ? 'bg-warning/10 border-warning/20 text-warning' : 'bg-primary/10 border-primary/20 text-primary'
                           )}>
-                            {n.type === 'sos' ? <AlertTriangle className="h-4 w-4" /> :
-                              n.type === 'delay' ? <Clock className="h-4 w-4" /> : <Bus className="h-4 w-4" />}
+                            {n.priority === 'critical' || n.type === 'sos' ? <AlertTriangle className="h-4 w-4" /> :
+                             n.priority === 'warning' || n.type === 'delay' ? <Clock className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-bold text-foreground leading-tight">{n.title}</p>
-                            <p className="mt-1 text-xs text-muted-foreground leading-snug">{n.message}</p>
-                            <p className="mt-1.5 text-[10px] text-muted-foreground/60">
-                              {new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </p>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className={cn("text-sm font-bold leading-tight", !n.is_read ? 'text-foreground' : 'text-muted-foreground')}>
+                                {n.vehicle_plate && <span className="text-[10px] font-black mr-1 opacity-60">[{n.vehicle_plate}]</span>}
+                                {n.title || (n.priority === 'critical' ? 'Critical Alert' : n.priority === 'warning' ? 'System Warning' : 'Update')}
+                              </p>
+                              {!n.is_read && <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", 
+                                n.priority === 'critical' ? 'bg-destructive' : n.priority === 'warning' ? 'bg-warning' : 'bg-primary'
+                              )} />}
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground leading-snug line-clamp-2">{n.message}</p>
+                            <div className="mt-2 flex items-center justify-between">
+                              <p className="text-[9px] font-bold text-muted-foreground/60 uppercase tracking-tighter">
+                                {formatNotifDate(n.timestamp)}
+                              </p>
+                              {!n.is_read && <span className="text-[9px] font-bold text-primary group-hover:underline">Mark as read</span>}
+                            </div>
                           </div>
                         </div>
                       </div>
                     ))}
-                    {panelNotifications.length === 0 && (
-                      <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
-                        <Bell className="h-8 w-8 opacity-20" />
-                        <p className="text-xs">All caught up!</p>
+                    {sortedNotifications.length === 0 && (
+                      <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
+                        <div className="h-12 w-12 rounded-2xl bg-muted flex items-center justify-center mb-1">
+                          <Bell className="h-6 w-6 opacity-20" />
+                        </div>
+                        <p className="text-sm font-bold">All caught up!</p>
+                        <p className="text-[10px]">No unread alerts for your organization</p>
                       </div>
                     )}
                   </div>
                 </div>
               )}
             </div>
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-              <span className="text-sm font-bold text-primary">{initials}</span>
+
+            <div className="relative">
+              <button
+                onClick={() => setShowProfileDropdown(!showProfileDropdown)}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 transition-all active:scale-95 border border-primary/20"
+              >
+                <span className="text-sm font-black text-primary uppercase tracking-tighter">{initials}</span>
+              </button>
+
+              {showProfileDropdown && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowProfileDropdown(false)} />
+                  <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-2xl border border-border bg-card shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="border-b border-border bg-muted/30 px-4 py-3">
+                      <p className="text-sm font-bold text-foreground truncate">{userName}</p>
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">
+                        {isSuperAdmin ? "Super Admin" : "Admin"}
+                      </p>
+                    </div>
+                    <div className="p-1.5 flex flex-col gap-0.5">
+                      <button 
+                        onClick={() => { setSection("settings"); setShowProfileDropdown(false) }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-primary/5 hover:text-primary transition-colors"
+                      >
+                        <User className="h-4 w-4" /> Admin Profile
+                      </button>
+                      <div className="h-px bg-border my-1 mx-2" />
+                      <button 
+                        onClick={handleLogout}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/5 transition-colors"
+                      >
+                        <LogOut className="h-4 w-4" /> Sign Out
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </header>
@@ -821,25 +1095,38 @@ export function AdminDashboard() {
               })()}
 
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                  <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
-                  <div className="flex flex-col gap-4">
-                    {driversData.slice(0, 5).map((d: any, i) => (
-                      <div key={i} className="flex items-start gap-3">
-                        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10")}>
-                          <UserPlus className={cn("h-4 w-4 text-primary")} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-foreground">{d.name} onboarded</p>
-                          <p className="text-xs text-muted-foreground">{new Date(d.created_at || Date.now()).toLocaleDateString()}</p>
-                        </div>
-                      </div>
-                    ))}
-                    {driversData.length === 0 && <p className="text-xs text-muted-foreground italic">No recent activity found.</p>}
+                {isSuperAdmin && (
+                  <div className="rounded-2xl border border-border bg-card p-5 shadow-sm flex flex-col">
+                    <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
+                    <div className="flex flex-col gap-4 flex-1">
+                      {[...driversData]
+                        .filter(d => d.created_at)
+                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                        .slice(0, 5)
+                        .map((d: any, i) => {
+                          const diffMs = Date.now() - new Date(d.created_at).getTime()
+                          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+                          const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+                          const diffMins = Math.floor(diffMs / (1000 * 60))
+                          const relativeTime = diffDays > 0 ? `${diffDays} day${diffDays > 1 ? 's' : ''} ago` : diffHours > 0 ? `${diffHours} hour${diffHours > 1 ? 's' : ''} ago` : diffMins > 0 ? `${diffMins} min${diffMins > 1 ? 's' : ''} ago` : "Just now"
+
+                          return (
+                            <div key={i} className="flex items-start gap-3">
+                              <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10")}>
+                                <UserPlus className={cn("h-4 w-4 text-primary")} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm text-foreground">{d.name} onboarded</p>
+                                <p className="text-xs text-muted-foreground">{relativeTime}</p>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      {driversData.length === 0 && <p className="text-xs text-muted-foreground italic">No recent activity found.</p>}
+                    </div>
+                    <button onClick={() => setSection("admins")} className="mt-4 w-full rounded-xl bg-muted/50 p-2.5 text-xs font-semibold text-primary transition-colors hover:bg-muted">View Detailed Logs</button>
                   </div>
-                </div>
-
-
+                )}
               </div>
 
               {/* Quick Actions */}
@@ -873,7 +1160,7 @@ export function AdminDashboard() {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <h1 className="text-2xl font-bold text-foreground">Live Tracking</h1>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <FilterDropdown label="Status" options={["on-duty", "off-duty", "on-time", "delayed", "emergency"]} value={trackStatus} onChange={setTrackStatus} />
+                  <FilterDropdown label="Status" options={["on-duty", "off-duty", "delayed", "emergency"]} value={trackStatus} onChange={setTrackStatus} />
                   <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
                     <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
                     {filteredTracking.length} vehicles
@@ -988,9 +1275,14 @@ export function AdminDashboard() {
                   onChange={setMemberGradeFilter}
                 />
                 <FilterDropdown label="Route" options={[...new Set(studentsData.map(s => s.route || s.route_name || "").filter(Boolean))]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
-                <FilterDropdown label="Status" options={[...new Set(studentsData.map(s => s.status || "active").filter(Boolean))]} value={memberStatusFilter} onChange={setMemberStatusFilter} />
-                {(memberGradeFilter !== "all" || memberRouteFilter !== "all" || memberStatusFilter !== "all" || memberSearch) && (
-                  <button onClick={() => { setMemberGradeFilter("all"); setMemberRouteFilter("all"); setMemberStatusFilter("all"); setMemberSearch("") }}
+                <FilterDropdown 
+                  label="Section" 
+                  options={isCorporate ? [] : ["A", "B", "C", "D", "E", "F", "G", "H"]} 
+                  value={memberSectionFilter} 
+                  onChange={setMemberSectionFilter} 
+                />
+                {(memberGradeFilter !== "all" || memberRouteFilter !== "all" || memberSectionFilter !== "all" || memberSearch) && (
+                  <button onClick={() => { setMemberGradeFilter("all"); setMemberRouteFilter("all"); setMemberSectionFilter("all"); setMemberSearch("") }}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
                     <X className="h-3 w-3" />Clear
                   </button>
@@ -1006,6 +1298,9 @@ export function AdminDashboard() {
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">
                         {isCorporate ? "Department" : "Grade"}
                       </th>
+                      {!isCorporate && (
+                        <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Section</th>
+                      )}
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">ID</th>
                       <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-muted-foreground">Route</th>
                       <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-muted-foreground">Actions</th>
@@ -1016,6 +1311,9 @@ export function AdminDashboard() {
                       <tr key={s.id || i} className="border-b border-border/50 hover:bg-secondary/50 transition-colors">
                         <td className="px-5 py-3 font-semibold text-foreground">{s.name || "—"}</td>
                         <td className="px-5 py-3 text-muted-foreground">{isCorporate ? (s.dept || s.department || "—") : (s.grade || s.class || "—")}</td>
+                        {!isCorporate && (
+                          <td className="px-5 py-3 text-muted-foreground">{s.section || "—"}</td>
+                        )}
                         <td className="px-5 py-3 font-mono text-xs text-muted-foreground">{s.memberId || s.student_id || s.id || "—"}</td>
                         <td className="px-5 py-3 text-muted-foreground">{s.route || s.route_name || "—"}</td>
                         <td className="px-5 py-3 text-right">
@@ -1177,11 +1475,11 @@ export function AdminDashboard() {
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex-1 min-w-48 max-w-xs">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input placeholder="Search plate or driver..." value={vehicleSearch} onChange={(e) => setVehicleSearch(e.target.value)} className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
+                  <Input placeholder="Search vehicles..." value={vehicleSearch} onChange={(e) => setVehicleSearch(e.target.value)} className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
                 </div>
+                <FilterDropdown label="Type" options={["Bus", "Van", "Mini Bus", "Car"]} value={vehicleTypeFilter} onChange={setVehicleTypeFilter} />
                 <FilterDropdown label="Status" options={["on-duty", "off-duty", "delayed", "emergency"]} value={vehicleStatusFilter} onChange={setVehicleStatusFilter} />
-                <FilterDropdown label="Type" options={["School Bus", "Mini Bus", "Van", "Car", "Shuttle"]} value={vehicleTypeFilter} onChange={setVehicleTypeFilter} />
-                <FilterDropdown label="Route" options={Array.from(new Set(routesData.map(r => r.route_name))).filter(Boolean)} value={vehicleRouteFilter} onChange={setVehicleRouteFilter} />
+                <FilterDropdown label="Route" options={routesData.map(r => r.route_name)} value={vehicleRouteFilter} onChange={setVehicleRouteFilter} />
                 <FilterDropdown label="Compliance" options={["expiring-soon", "expired"]} value={vehicleExpiringFilter} onChange={setVehicleExpiringFilter} />
                 {(vehicleStatusFilter !== "all" || vehicleTypeFilter !== "all" || vehicleRouteFilter !== "all" || vehicleExpiringFilter !== "all" || vehicleSearch) && (
                   <button onClick={() => { setVehicleStatusFilter("all"); setVehicleTypeFilter("all"); setVehicleRouteFilter("all"); setVehicleExpiringFilter("all"); setVehicleSearch("") }}
@@ -1217,17 +1515,31 @@ export function AdminDashboard() {
                         const now = Date.now()
                         const weekInMs = 7 * 24 * 60 * 60 * 1000
                         const issues = complianceFields.map(f => {
-                          if (!f.v) return { ...f, status: 'missing' }
+                          if (!f.v) return { ...f, status: 'missing', priority: 0, days: null }
                           const t = new Date(f.v).getTime()
-                          if (t <= now) return { ...f, status: 'expired' }
-                          if (t - now < weekInMs) return { ...f, status: 'warning' }
-                          return { ...f, status: 'ok' }
+                          const days = Math.ceil((t - now) / (1000 * 60 * 60 * 24))
+                          if (t <= now) return { ...f, status: 'expired', priority: 3, days }
+                          if (t - now < weekInMs) return { ...f, status: 'warning', priority: 2, days }
+                          return { ...f, status: 'ok', priority: 1, days }
                         })
-                        const hasCritical = issues.some(i => i.status === 'expired')
-                        const hasWarning = issues.some(i => i.status === 'warning')
+                        
+                        const criticalIssues = issues.filter(i => i.status === 'expired')
+                        const warningIssues = issues.filter(i => i.status === 'warning')
+                        
+                        const sortedAlerts = [...criticalIssues, ...warningIssues].sort((a,b) => b.priority - a.priority || (a.days || 0) - (b.days || 0))
+                        
+                        const getAlertText = (iss: any) => {
+                          if (iss.status === 'expired') return `${iss.l} expired`
+                          if (iss.days === 0) return `${iss.l} expires today`
+                          if (iss.days === 1) return `${iss.l} expires tomorrow`
+                          return `${iss.l} expires in ${iss.days} days`
+                        }
+                        
+                        const hasCritical = criticalIssues.length > 0
+                        const hasWarning = warningIssues.length > 0
 
                         return (
-                        <tr key={i} className="group hover:bg-muted/30 transition-colors">
+                        <tr key={v.id || i} className="group hover:bg-muted/30 transition-colors">
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
                               <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-all",
@@ -1235,7 +1547,7 @@ export function AdminDashboard() {
                                 ["on-duty", "active", "moving"].includes(v.status) ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                               )}>
                                 {(() => {
-                                  const Icon = getVehicleIcon(v.type)
+                                  const Icon = getVehicleIcon(v.type, v.capacity)
                                   return <Icon className="h-5 w-5" />
                                 })()}
                               </div>
@@ -1294,17 +1606,22 @@ export function AdminDashboard() {
                                   />
                                 ))}
                               </div>
-                              <div className="flex items-center gap-1.5">
-                                {hasCritical ? (
-                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-destructive/10 text-destructive text-[9px] font-black uppercase tracking-tighter shadow-sm">
-                                    <AlertTriangle className="h-2.5 w-2.5" /> CRITICAL EXPIRED
-                                  </div>
-                                ) : hasWarning ? (
-                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-warning/10 text-warning text-[9px] font-black uppercase tracking-tighter">
-                                    <Clock className="h-2.5 w-2.5" /> EXPIRING SOON
+                              <div onClick={() => setSelectedVehicleCompliance(v)} className="flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition-opacity">
+                                {sortedAlerts.length > 0 ? (
+                                  <div className={cn("flex flex-col gap-0.5 py-1 px-2 rounded-lg shadow-sm border", 
+                                    hasCritical ? "bg-destructive/10 border-destructive/20 text-destructive" : "bg-warning/10 border-warning/20 text-warning"
+                                  )}>
+                                    <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-tighter">
+                                      {hasCritical ? <AlertTriangle className="h-2.5 w-2.5" /> : <Clock className="h-2.5 w-2.5" />}
+                                      {hasCritical ? "Critical Alert" : "Expiring Soon"}
+                                    </div>
+                                    <div className="text-[10px] font-bold leading-tight line-clamp-2 max-w-[140px]">
+                                      {sortedAlerts.slice(0, 2).map(getAlertText).join(", ")}
+                                      {sortedAlerts.length > 2 && ` +${sortedAlerts.length - 2} more`}
+                                    </div>
                                   </div>
                                 ) : (
-                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-success/10 text-success text-[9px] font-black uppercase tracking-tighter">
+                                  <div className="flex items-center gap-1 py-1 px-2 rounded-lg bg-success/10 border border-success/20 text-success text-[10px] font-black uppercase tracking-tighter shadow-sm w-fit">
                                     <CheckCircle2 className="h-2.5 w-2.5" /> COMPLIANT
                                   </div>
                                 )}
@@ -1458,17 +1775,53 @@ export function AdminDashboard() {
                     variant="outline" 
                     className="gap-2 rounded-xl"
                     onClick={() => {
-                      const csv = "Date,Action,Admin,Details\n" + 
-                        dashboardStats.delays.map((l: any) => `${new Date(l.timestamp).toLocaleString()},Delay,${l.driver_name},${l.message}`).join("\n");
-                      const blob = new Blob([csv], { type: 'text/csv' });
-                      const url = window.URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.setAttribute('hidden', '');
-                      a.setAttribute('href', url);
-                      a.setAttribute('download', 'delay_analytics.csv');
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
+                      const now = new Date();
+                      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).getTime();
+                      
+                      // Filter notifications for last 7 days
+                      const last7DaysNotifs = notifications.filter(n => {
+                        let t: number;
+                        if (n.timestamp?.toMillis) t = n.timestamp.toMillis();
+                        else if (n.timestamp?.seconds) t = n.timestamp.seconds * 1000;
+                        else t = new Date(n.timestamp || 0).getTime();
+                        return t >= sevenDaysAgo;
+                      });
+
+                      const delays = last7DaysNotifs.filter(n => n.type === "delay");
+                      const sos = last7DaysNotifs.filter(n => n.type === "sos");
+                      const starts = last7DaysNotifs.filter(n => n.type === "trip_start");
+                      const ends = last7DaysNotifs.filter(n => n.type === "trip_end");
+
+                      const downloadFile = (content: string, filename: string) => {
+                        const blob = new Blob([content], { type: 'text/csv' });
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.setAttribute('hidden', '');
+                        a.setAttribute('href', url);
+                        a.setAttribute('download', filename);
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                      };
+
+                      // 1. Delays Report
+                      const delaysCsv = "DELAYS & ALERTS (Last 7 Days)\nDate,Type,Details,Priority\n" + 
+                        delays.map((l: any) => `${new Date(l.timestamp?.toMillis ? l.timestamp.toMillis() : (l.timestamp?.seconds ? l.timestamp.seconds * 1000 : l.timestamp)).toLocaleString()},${l.type},"${l.message}",${l.priority}`).join("\n");
+                      downloadFile(delaysCsv, `delays_report_${now.toISOString().split('T')[0]}.csv`);
+
+                      // 2. SOS Report
+                      const sosCsv = "EMERGENCY SOS (Last 7 Days)\nDate,Vehicle,Driver,Details\n" + 
+                        sos.map((l: any) => `${new Date(l.timestamp?.toMillis ? l.timestamp.toMillis() : (l.timestamp?.seconds ? l.timestamp.seconds * 1000 : l.timestamp)).toLocaleString()},${l.vehicle_plate},${l.metadata?.driver_name || '—'},"${l.message}"`).join("\n");
+                      setTimeout(() => downloadFile(sosCsv, `sos_report_${now.toISOString().split('T')[0]}.csv`), 200);
+
+                      // 3. Trip Activity Report
+                      const tripStatsCsv = "TRIP ACTIVITY (Last 7 Days)\nDate,Event,Vehicle,Route\n" + 
+                        [...starts, ...ends]
+                          .sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0))
+                          .map((l: any) => `${new Date(l.timestamp?.toMillis ? l.timestamp.toMillis() : (l.timestamp?.seconds ? l.timestamp.seconds * 1000 : l.timestamp)).toLocaleString()},${l.type === 'trip_start' ? 'STARTED' : 'ENDED'},${l.metadata?.vehicle_id || l.vehicle_plate || '—'},"${l.metadata?.route_name || l.message || '—'}"`).join("\n");
+                      setTimeout(() => downloadFile(tripStatsCsv, `trip_activity_${now.toISOString().split('T')[0]}.csv`), 400);
+
+                      showToast("7-day reports generated");
                     }}
                   >
                     <Download className="h-4 w-4" /> Export All
@@ -1695,6 +2048,66 @@ export function AdminDashboard() {
           onClose={() => { setActiveForm(null); setEditingRoute(null) }}
           onSave={() => { showToast(editingRoute ? "Route updated successfully" : "Route created successfully"); fetchRoutes() }}
         />
+      )}
+
+      {/* Compliance Breakdown Modal */}
+      {selectedVehicleCompliance && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-sm"
+          onClick={e => e.target === e.currentTarget && setSelectedVehicleCompliance(null)}>
+          <div className="w-full max-w-md animate-in fade-in zoom-in duration-200 rounded-3xl bg-card shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-6 py-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                  <ShieldCheck className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-foreground">Compliance Breakdown</h2>
+                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{selectedVehicleCompliance.plate_number || selectedVehicleCompliance.id}</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedVehicleCompliance(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-muted transition-colors">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-6 flex flex-col gap-4">
+              {[
+                { label: 'RC Expiry', value: selectedVehicleCompliance.rc_expiry },
+                { label: 'Insurance Expiry', value: selectedVehicleCompliance.insurance_expiry },
+                { label: 'PUC Expiry', value: selectedVehicleCompliance.puc_expiry },
+                { label: 'Fitness Expiry', value: selectedVehicleCompliance.fitness_expiry },
+                { label: 'Permit Expiry', value: selectedVehicleCompliance.permit_expiry }
+              ].map((item, idx) => {
+                const status = !item.value ? 'missing' : 
+                               new Date(item.value).getTime() <= Date.now() ? 'expired' : 
+                               new Date(item.value).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000 ? 'warning' : 'ok';
+                const daysLeft = item.value ? Math.ceil((new Date(item.value).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
+
+                return (
+                  <div key={idx} className="flex items-center justify-between rounded-2xl border border-border bg-muted/20 p-4">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{item.label}</span>
+                      <span className="text-sm font-bold text-foreground">{item.value ? new Date(item.value).toLocaleDateString("en-IN", { dateStyle: "long" }) : "Not uploaded"}</span>
+                    </div>
+                    <div className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter border shadow-sm",
+                      status === 'ok' ? "bg-success/10 border-success/20 text-success" :
+                      status === 'warning' ? "bg-warning/10 border-warning/20 text-warning animate-pulse" :
+                      status === 'expired' ? "bg-destructive/10 border-destructive/20 text-destructive" : "bg-muted border-border text-muted-foreground"
+                    )}>
+                      {status === 'expired' && "Expired"}
+                      {status === 'warning' && `Expiring in ${daysLeft}d`}
+                      {status === 'ok' && "Compliant"}
+                      {status === 'missing' && "Missing"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-4 bg-muted/10 border-t border-border">
+              <Button onClick={() => setSelectedVehicleCompliance(null)} className="w-full h-11 rounded-xl">Close</Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Toast */}

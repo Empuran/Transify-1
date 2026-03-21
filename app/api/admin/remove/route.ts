@@ -29,18 +29,26 @@ export async function POST(req: NextRequest) {
 
         const targetData = targetSnap.data()!;
 
-        // 3. Prevent removing yourself
+        // 3. Allow self-disable IF there's another SUPER_ADMIN
         if (user_id === removed_by_user_id) {
-            return NextResponse.json(
-                { error: "You cannot remove yourself" },
-                { status: 400 }
-            );
+            // Check count of super admins in this organization
+            const allAdmins = await adminDb.collection("admin_users")
+                .where("organization_id", "==", organization_id)
+                .where("role", "==", "SUPER_ADMIN")
+                .where("status", "==", "ACTIVE")
+                .get();
+
+            if (allAdmins.size <= 1) {
+                return NextResponse.json({ 
+                    error: "You are the only Super Admin. Assign another Super Admin or invite one before disabling your own account." 
+                }, { status: 400 });
+            }
         }
 
-        // 4. Prevent removing another SUPER_ADMIN
-        if (targetData.role === "SUPER_ADMIN") {
+        // 4. Prevent removing another SUPER_ADMIN (demote first)
+        if (user_id !== removed_by_user_id && targetData.role === "SUPER_ADMIN") {
             return NextResponse.json(
-                { error: "Cannot remove a Super Admin. Demote them first." },
+                { error: "Cannot remove another Super Admin. Demote them first." },
                 { status: 403 }
             );
         }

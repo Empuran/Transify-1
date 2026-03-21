@@ -6,19 +6,50 @@ import { createAuditLog } from "@/lib/audit-logger";
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { name, grade, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name } = body;
+        const { name, grade, section, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name } = body;
 
-        if (!name || !memberId || !organization_id) {
+        if (!name || !organization_id) {
             return NextResponse.json(
-                { error: "name, memberId, and organization_id are required" },
+                { error: "name and organization_id are required" },
                 { status: 400 }
             );
         }
 
+        let finalMemberId = memberId?.trim();
+        if (!finalMemberId) {
+            // Auto-generate Member ID
+            const orgDoc = await adminDb.collection("organizations").doc(organization_id).get();
+            const orgData = orgDoc.data() || {};
+            const orgName = orgData.name || organization || "";
+            const orgCode = orgData.code || "";
+            
+            let prefix = "MBR";
+            if (orgName) {
+                prefix = orgName.split(" ").map((w: string) => w[0]).filter(Boolean).join("").toUpperCase();
+            } else if (orgCode) {
+                prefix = orgCode.split("-")[0].toUpperCase();
+            }
+            if (prefix.length > 5) prefix = prefix.substring(0, 4);
+            const fullPrefix = `${prefix}-`;
+
+            const snapshot = await adminDb.collection("students").where("organization_id", "==", organization_id).get();
+            let maxNum = 0;
+            snapshot.forEach(doc => {
+                const mId = doc.data().memberId || "";
+                if (mId.startsWith(fullPrefix)) {
+                    const numPart = mId.replace(fullPrefix, "");
+                    const num = parseInt(numPart, 10);
+                    if (!isNaN(num) && num > maxNum) maxNum = num;
+                }
+            });
+            finalMemberId = `${fullPrefix}${(maxNum + 1).toString().padStart(3, "0")}`;
+        }
+
         const studentDoc = {
             name: name.trim(),
-            grade: grade || "", // Also used for "Dept" in corporate
-            memberId: memberId.trim(),
+            grade: grade || "", 
+            section: section || "",
+            memberId: finalMemberId,
             parent_phone: parentPhone || "",
             route: route || "Unassigned",
             route_id: body.route_id || "",
@@ -41,12 +72,13 @@ export async function POST(req: NextRequest) {
             admin_name: admin_name || "",
             admin_email: admin_email || "",
             organization_id,
-            details: `Added student ${name.trim()} (${memberId.trim()})`,
+            details: `Added student ${name.trim()} (${finalMemberId})`,
         });
 
         return NextResponse.json({
             success: true,
             student_id: docRef.id,
+            generated_id: finalMemberId,
             message: `${name} added successfully`,
         });
     } catch (error: any) {

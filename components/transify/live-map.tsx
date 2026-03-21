@@ -140,9 +140,9 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
     // ── Fetch Route Directions if needed ────────────────────────────────────
     useEffect(() => {
         if (!isLoaded || !showDirections || routeStops.length < 2) {
-            setDirections(null);
-            setDirectionsStops([]);
-            setGeocodedStopsFallback([]);
+            setDirections(prev => prev === null ? prev : null);
+            setDirectionsStops(prev => prev.length === 0 ? prev : []);
+            setGeocodedStopsFallback(prev => prev.length === 0 ? prev : []);
             return;
         }
 
