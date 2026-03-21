@@ -546,9 +546,14 @@ export function AdminDashboard() {
 
   // ── Tracking Filters ────────────────────────────────────────────────────
   const [trackStatus, setTrackStatus] = useState("all")
-  const filteredTracking = useMemo(() => vehiclesData.filter((v: any) =>
-    trackStatus === "all" || v.status === trackStatus
-  ), [trackStatus, vehiclesData])
+  const filteredTracking = useMemo(() => vehiclesData.filter((v: any) => {
+    if (trackStatus === "all") return true
+    const s = (v.status || "").toLowerCase()
+    // Group filters
+    if (trackStatus === "on-duty") return ["on-duty", "on-time", "moving", "active", "in-progress", "in-transit"].includes(s)
+    if (trackStatus === "off-duty") return ["off-duty", "idle", "stationary", "offline"].includes(s)
+    return s === trackStatus
+  }), [trackStatus, vehiclesData])
 
   const navGroups: { group: string; items: { id: ActiveSection; label: string; icon: React.ElementType }[] }[] = [
     {
@@ -844,7 +849,7 @@ export function AdminDashboard() {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <h1 className="text-2xl font-bold text-foreground">Live Tracking</h1>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <FilterDropdown label="Status" options={["on-time", "delayed", "emergency"]} value={trackStatus} onChange={setTrackStatus} />
+                  <FilterDropdown label="Status" options={["on-duty", "off-duty", "on-time", "delayed", "emergency"]} value={trackStatus} onChange={setTrackStatus} />
                   <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
                     <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
                     {filteredTracking.length} vehicles
@@ -877,7 +882,12 @@ export function AdminDashboard() {
 
                 <div className="lg:col-span-2 flex flex-col gap-3 overflow-y-auto max-h-[420px] pr-1">
                   {filteredTracking.map((v) => (
-                    <div key={v.id} className="rounded-2xl border border-border bg-card p-4 shadow-sm shrink-0">
+                    <div key={v.id} className={cn(
+                      "rounded-2xl border bg-card p-4 shadow-sm shrink-0 transition-all",
+                      v.status === "emergency"
+                        ? "border-destructive/60 bg-destructive/5 shadow-destructive/20 shadow-md ring-1 ring-destructive/30 animate-pulse"
+                        : "border-border"
+                    )}>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <div className={cn("flex h-8 w-8 items-center justify-center rounded-xl",

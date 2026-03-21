@@ -17,6 +17,8 @@ function AcceptInviteContent() {
     const [message, setMessage] = useState("")
     const [fullName, setFullName] = useState("")
     const [savingName, setSavingName] = useState(false)
+    const [orgCode, setOrgCode] = useState<string | null>(null)
+    const [orgCategory, setOrgCategory] = useState<"school" | "corporate">("school")
 
     useEffect(() => {
         if (token && email && status === "idle") {
@@ -46,9 +48,15 @@ function AcceptInviteContent() {
             }
 
             if (data.already_active) {
+                // Store org details even for already_active (used in goToLogin)
+                if (data.org_code) setOrgCode(data.org_code)
+                if (data.org_category) setOrgCategory(data.org_category)
                 setStatus("already_active")
                 setMessage(data.message)
             } else {
+                // Store org details so we can redirect to the correct login page
+                if (data.org_code) setOrgCode(data.org_code)
+                if (data.org_category) setOrgCategory(data.org_category)
                 // Show name input step
                 setStatus("name_input")
                 setMessage(data.message || "Invitation accepted!")
@@ -85,7 +93,10 @@ function AcceptInviteContent() {
     }
 
     const goToLogin = () => {
-        router.push("/admin-login?category=school")
+        const category = orgCategory || "school"
+        const params = new URLSearchParams({ category })
+        if (orgCode) params.set("orgCode", orgCode)
+        router.push(`/admin-login?${params.toString()}`)
     }
 
     if (!token || !email) {

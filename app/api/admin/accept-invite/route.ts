@@ -33,10 +33,25 @@ export async function POST(req: NextRequest) {
 
         // Check if already active
         if (data.status === "ACTIVE") {
+            // Fetch org details for the redirect
+            let org_code: string | null = null;
+            let org_category: "school" | "corporate" | null = null;
+            try {
+                const orgDoc = await adminDb.collection("organizations").doc(data.organization_id).get();
+                if (orgDoc.exists) {
+                    const orgData = orgDoc.data()!;
+                    org_code = orgData.code || null;
+                    org_category = orgData.category || null;
+                }
+            } catch { /* non-fatal */ }
+
             return NextResponse.json({
                 success: true,
                 message: "Your account is already active. You can log in now.",
                 already_active: true,
+                organization_id: data.organization_id,
+                org_code,
+                org_category,
             });
         }
 
@@ -67,10 +82,26 @@ export async function POST(req: NextRequest) {
             timestamp: new Date().toISOString(),
         });
 
+        // Fetch org details so the frontend can redirect to the correct login page
+        let org_code: string | null = null;
+        let org_category: "school" | "corporate" | null = null;
+        try {
+            const orgDoc = await adminDb.collection("organizations").doc(data.organization_id).get();
+            if (orgDoc.exists) {
+                const orgData = orgDoc.data()!;
+                org_code = orgData.code || null;
+                org_category = orgData.category || null;
+            }
+        } catch {
+            // non-fatal — frontend will fall back to default
+        }
+
         return NextResponse.json({
             success: true,
             message: "Invitation accepted! You can now log in.",
             organization_id: data.organization_id,
+            org_code,
+            org_category,
         });
     } catch (error: any) {
         console.error("Accept invite error:", error);

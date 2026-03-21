@@ -8,7 +8,8 @@ import { db } from "@/lib/firebase";
 
 const containerStyle = { width: "100%", height: "100%", borderRadius: "0.75rem" };
 
-const defaultCenter = { lat: 12.9716, lng: 77.5946 };
+const DEFAULT_INDIA_CENTER = { lat: 12.9716, lng: 77.5946 };
+
 
 // ── Vehicle type → emoji character used as Google Maps marker label ─────────
 function getVehicleEmoji(type: string = ""): string {
@@ -22,7 +23,7 @@ function getVehicleEmoji(type: string = ""): string {
 }
 
 // ── Build a data-URI SVG marker for the vehicle (lightweight, no external URL) ─
-function makeSvgMarkerUrl(type: string = "", status: string = "on-time", isSelected: boolean = false): string {
+function makeSvgMarkerUrl(type: string = "", status: string = "on-time", isSelected: boolean = false, heading: number = 0): string {
     const t = type.toLowerCase();
     const statusColor = status === "emergency" ? "#ef4444" : status === "delayed" ? "#f59e0b" : "#22c55e";
     const selectedScale = isSelected ? 1.2 : 1;
@@ -67,7 +68,7 @@ function makeSvgMarkerUrl(type: string = "", status: string = "on-time", isSelec
 
     const glow = isSelected ? `<circle cx="22" cy="20" r="28" fill="${statusColor}33" />` : '';
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 40" width="44" height="40" style="transform: scale(${selectedScale}); transform-origin: center;">
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 40" width="44" height="40" style="transform: scale(${selectedScale}) rotate(${heading}deg); transform-origin: center;">
 ${glow}
 ${vehicleSvg}
 <circle cx="38" cy="6" r="6" fill="${statusColor}" stroke="white" stroke-width="1.5"/>
@@ -124,6 +125,17 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
     const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
     const [directionsStops, setDirectionsStops] = useState<{ lat: number; lng: number }[]>([]);
     const [geocodedStopsFallback, setGeocodedStopsFallback] = useState<({ lat: number; lng: number } | null)[]>([]);
+    const [dynamicCenter, setDynamicCenter] = useState(DEFAULT_INDIA_CENTER);
+
+    useEffect(() => {
+        if (navigator.geolocation && vehicles.length === 0) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => setDynamicCenter({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+                () => setDynamicCenter(DEFAULT_INDIA_CENTER),
+                { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 }
+            );
+        }
+    }, [vehicles.length]);
 
     // ── Fetch Route Directions if needed ────────────────────────────────────
     useEffect(() => {
@@ -247,7 +259,7 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
 
     const center = vehicles.length > 0
         ? { lat: vehicles[0].latitude, lng: vehicles[0].longitude }
-        : defaultCenter;
+        : dynamicCenter;
 
     // Stop label alphabet
     const STOP_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -287,13 +299,21 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
                 const vType = v.vehicle_type || meta.type || "car"; // default to car if unknown since car is most common in this app
                 const vStatus = v.status || "on-time";
                 const isSelected = selectedVehicleId === v.id;
-                const markerUrl = makeSvgMarkerUrl(vType, vStatus, isSelected);
                 const label = meta.plate_number || v.plate_number || v.id.slice(0, 6);
                 
                 // Calculate simple distance/ETA based on history vs current
                 const history = historyByVehicle[v.id] || [];
                 let distanceStr = "0.0 km";
                 let etaStr = "-- mins";
+
+                let computedHeading = v.heading || 0;
+                if (!v.heading && history.length > 1) {
+                    const p1 = history[history.length - 2];
+                    const p2 = history[history.length - 1];
+                    computedHeading = Math.atan2(p2.lng - p1.lng, p2.lat - p1.lat) * 180 / Math.PI;
+                }
+
+                const markerUrl = makeSvgMarkerUrl(vType, vStatus, isSelected, computedHeading);
                 if (history.length > 0) {
                     const start = history[0];
                     const d = calcDistanceKm(start.lat, start.lng, v.latitude, v.longitude);
