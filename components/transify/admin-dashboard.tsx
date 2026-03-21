@@ -6,7 +6,7 @@ import {
   Search, Download, Route, UserPlus, BarChart3, TrendingUp, Star,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
-  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User, ArrowLeft,
+  Filter, X, ChevronDown, ShieldCheck, Pencil, Trash2, Car, Truck, Calendar, CircleDashed, User, ArrowLeft, MapPin,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -412,6 +412,8 @@ export function AdminDashboard() {
   const [vehicleSearch, setVehicleSearch] = useState("")
   const [vehicleStatusFilter, setVehicleStatusFilter] = useState("all")
   const [vehicleTypeFilter, setVehicleTypeFilter] = useState("all")
+  const [vehicleRouteFilter, setVehicleRouteFilter] = useState("all")
+  const [vehicleExpiringFilter, setVehicleExpiringFilter] = useState("all")
   const [vehiclesData, setVehiclesData] = useState<any[]>([])
 
   const fetchVehicles = useCallback(() => {
@@ -440,11 +442,33 @@ export function AdminDashboard() {
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchVehicles])
 
-  const filteredVehicles = useMemo(() => vehiclesData.filter((v: any) =>
-    ((v.plate_number || v.id || "").toLowerCase().includes(vehicleSearch.toLowerCase()) || (v.driver_name || "").toLowerCase().includes(vehicleSearch.toLowerCase())) &&
-    (vehicleStatusFilter === "all" || v.status === vehicleStatusFilter) &&
-    (vehicleTypeFilter === "all" || v.type === vehicleTypeFilter)
-  ), [vehicleSearch, vehicleStatusFilter, vehicleTypeFilter, vehiclesData])
+  const filteredVehicles = useMemo(() => vehiclesData.filter((v: any) => {
+    const searchMatch = (v.plate_number || v.id || "").toLowerCase().includes(vehicleSearch.toLowerCase()) || (v.driver_name || "").toLowerCase().includes(vehicleSearch.toLowerCase())
+    const statusMatch = vehicleStatusFilter === "all" || v.status === vehicleStatusFilter
+    const typeMatch = vehicleTypeFilter === "all" || v.type === vehicleTypeFilter
+    const routeMatch = vehicleRouteFilter === "all" || (v.route_name || v.route || "").includes(vehicleRouteFilter)
+    
+    // Compliance check
+    let complianceMatch = true
+    if (vehicleExpiringFilter !== "all") {
+      const fields = ['rc_expiry', 'insurance_expiry', 'puc_expiry', 'fitness_expiry', 'permit_expiry']
+      const now = Date.now()
+      const weekInMs = 7 * 24 * 60 * 60 * 1000
+      let hasExpired = false
+      let hasExpiringSoon = false
+      fields.forEach(f => {
+        if (v[f]) {
+          const t = new Date(v[f]).getTime()
+          if (t <= now) hasExpired = true
+          else if (t - now < weekInMs) hasExpiringSoon = true
+        }
+      })
+      if (vehicleExpiringFilter === "expired") complianceMatch = hasExpired
+      if (vehicleExpiringFilter === "expiring-soon") complianceMatch = hasExpiringSoon && !hasExpired
+    }
+
+    return searchMatch && statusMatch && typeMatch && routeMatch && complianceMatch
+  }), [vehicleSearch, vehicleStatusFilter, vehicleTypeFilter, vehicleRouteFilter, vehicleExpiringFilter, vehiclesData])
 
   // ── Route Filters ───────────────────────────────────────────────────────
   const [routeSearch, setRouteSearch] = useState("")
@@ -1153,17 +1177,19 @@ export function AdminDashboard() {
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex-1 min-w-48 max-w-xs">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input placeholder="Search by plate or driver..." value={vehicleSearch} onChange={(e) => setVehicleSearch(e.target.value)} className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
+                  <Input placeholder="Search plate or driver..." value={vehicleSearch} onChange={(e) => setVehicleSearch(e.target.value)} className="h-10 rounded-xl bg-card border-border pl-9 text-sm" />
                 </div>
                 <FilterDropdown label="Status" options={["on-duty", "off-duty", "delayed", "emergency"]} value={vehicleStatusFilter} onChange={setVehicleStatusFilter} />
-                <FilterDropdown label="Type" options={["School Bus", "Mini Bus", "Van", "Shuttle"]} value={vehicleTypeFilter} onChange={setVehicleTypeFilter} />
-                {(vehicleStatusFilter !== "all" || vehicleTypeFilter !== "all" || vehicleSearch) && (
-                  <button onClick={() => { setVehicleStatusFilter("all"); setVehicleTypeFilter("all"); setVehicleSearch("") }}
+                <FilterDropdown label="Type" options={["School Bus", "Mini Bus", "Van", "Car", "Shuttle"]} value={vehicleTypeFilter} onChange={setVehicleTypeFilter} />
+                <FilterDropdown label="Route" options={Array.from(new Set(routesData.map(r => r.route_name))).filter(Boolean)} value={vehicleRouteFilter} onChange={setVehicleRouteFilter} />
+                <FilterDropdown label="Compliance" options={["expiring-soon", "expired"]} value={vehicleExpiringFilter} onChange={setVehicleExpiringFilter} />
+                {(vehicleStatusFilter !== "all" || vehicleTypeFilter !== "all" || vehicleRouteFilter !== "all" || vehicleExpiringFilter !== "all" || vehicleSearch) && (
+                  <button onClick={() => { setVehicleStatusFilter("all"); setVehicleTypeFilter("all"); setVehicleRouteFilter("all"); setVehicleExpiringFilter("all"); setVehicleSearch("") }}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
                     <X className="h-3 w-3" />Clear
                   </button>
                 )}
-                <span className="ml-auto text-xs text-muted-foreground">{filteredVehicles.length} of {vehiclesData.length}</span>
+                <span className="ml-auto text-xs text-muted-foreground font-medium">{filteredVehicles.length} vehicles found</span>
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -1171,95 +1197,147 @@ export function AdminDashboard() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-border bg-muted/30">
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Vehicle</th>
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Type</th>
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Assigned Driver</th>
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Active Route</th>
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Status & Progress</th>
-                        <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-muted-foreground text-right">Actions</th>
+                        <th className="px-5 py-4 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vehicle & Model</th>
+                        <th className="px-5 py-4 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Assignment</th>
+                        <th className="px-5 py-4 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Operational Status</th>
+                        <th className="px-5 py-4 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Compliance</th>
+                        <th className="px-5 py-4 text-[10px] font-bold uppercase tracking-wider text-muted-foreground text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {filteredVehicles.map((v, i) => (
+                      {filteredVehicles.map((v, i) => {
+                        // Compliance Logic
+                        const complianceFields = [
+                          { l: 'RC', v: v.rc_expiry },
+                          { l: 'Ins.', v: v.insurance_expiry },
+                          { l: 'PUC', v: v.puc_expiry },
+                          { l: 'Fitness', v: v.fitness_expiry },
+                          { l: 'Permit', v: v.permit_expiry }
+                        ]
+                        const now = Date.now()
+                        const weekInMs = 7 * 24 * 60 * 60 * 1000
+                        const issues = complianceFields.map(f => {
+                          if (!f.v) return { ...f, status: 'missing' }
+                          const t = new Date(f.v).getTime()
+                          if (t <= now) return { ...f, status: 'expired' }
+                          if (t - now < weekInMs) return { ...f, status: 'warning' }
+                          return { ...f, status: 'ok' }
+                        })
+                        const hasCritical = issues.some(i => i.status === 'expired')
+                        const hasWarning = issues.some(i => i.status === 'warning')
+
+                        return (
                         <tr key={i} className="group hover:bg-muted/30 transition-colors">
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
-                              <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-                                v.status === "on-duty" || v.status === "on-time" ? "bg-success/10 text-success" : 
-                                v.status === "delayed" ? "bg-warning/10 text-warning" : "bg-destructive/10 text-destructive"
+                              <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-all",
+                                v.status === "emergency" ? "bg-destructive text-white animate-pulse" :
+                                ["on-duty", "active", "moving"].includes(v.status) ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                               )}>
-                                <Bus className="h-5 w-5" />
+                                {(() => {
+                                  const Icon = getVehicleIcon(v.type)
+                                  return <Icon className="h-5 w-5" />
+                                })()}
                               </div>
                               <div className="flex flex-col min-w-0">
-                                <span className="text-sm font-bold font-mono text-foreground">{v.plate_number || v.id}</span>
-                                <span className="text-[10px] text-muted-foreground uppercase">{v.organization_id?.split("-")[0]}</span>
+                                <span className={cn("text-sm font-black font-mono tracking-tight", v.status === "emergency" ? "text-destructive" : "text-foreground")}>{v.plate_number || v.id}</span>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className="text-[10px] font-bold text-muted-foreground bg-muted px-1.5 rounded uppercase">{v.type || 'Vehicle'}</span>
+                                  {v.brand_model && <span className="text-[10px] text-muted-foreground truncate max-w-[80px]">{v.brand_model}</span>}
+                                </div>
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-4 text-sm text-foreground">{v.type}</td>
                           <td className="px-5 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
-                                <User className="h-3 w-3 text-primary" />
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2">
+                                <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center border border-primary/20">
+                                  <User className="h-2.5 w-2.5 text-primary" />
+                                </div>
+                                <span className="text-xs font-semibold text-foreground truncate max-w-[120px]">{v.driver_name || "Unassigned"}</span>
                               </div>
-                              <span className="text-sm text-foreground">{v.driver_name || "Unassigned"}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="h-5 w-5 rounded-full bg-warning/10 flex items-center justify-center border border-warning/20">
+                                  <Route className="h-2.5 w-2.5 text-warning" />
+                                </div>
+                                <span className="text-[11px] text-muted-foreground truncate max-w-[120px] font-medium">{v.route_name || v.route || "No Route"}</span>
+                              </div>
                             </div>
                           </td>
                           <td className="px-5 py-4">
-                            <div className="flex items-center gap-2">
-                              <Route className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="text-sm text-foreground">{v.route || "No Route"}</span>
-                            </div>
-                          </td>
-                          <td className="px-5 py-4">
-                            <div className="flex flex-col gap-1 min-w-[140px]">
+                            <div className="flex flex-col gap-1.5 min-w-[150px]">
                               <div className="flex items-center justify-between gap-3">
                                 <StatusBadge status={v.status} />
-                                <span className="text-[10px] font-bold text-muted-foreground">{typeof v.progress === 'number' ? v.progress.toFixed(0) : 0}%</span>
+                                {v.speed > 0 && <span className="text-[10px] font-black text-primary animate-pulse">{Math.round(v.speed)} km/h</span>}
                               </div>
-                              {v.current_stop && ["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && (
-                                <div className="text-[10px] font-medium text-primary/80 truncate mb-1">
-                                  {v.current_stop}
+                              {v.current_location_name && (
+                                <div className="flex items-center gap-1 text-[10px] text-muted-foreground font-medium truncate">
+                                  <MapPin className="h-2.5 w-2.5 shrink-0" />
+                                  {v.current_location_name}
                                 </div>
                               )}
-                              {/* Only show progress bar when on-duty or active alerts */}
-                              {["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && (
-                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                                  <div 
-                                    className={cn("h-full rounded-full transition-all duration-500", 
-                                      v.status === "delayed" ? "bg-warning" : 
-                                      v.status === "emergency" ? "bg-destructive" : "bg-success"
-                                    )}
-                                    style={{ width: `${v.progress || 0}%` }} 
+                              <div className="text-[9px] text-muted-foreground/60 uppercase font-bold tracking-tighter">
+                                Last updated: {v.last_updated ? new Date(v.last_updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex gap-1 flex-wrap max-w-[120px]">
+                                {issues.map((iss, idx) => (
+                                  <div key={idx} title={`${iss.l}: ${iss.v || 'Missing'}`} 
+                                    className={cn("h-1.5 w-3 rounded-full", 
+                                      iss.status === 'ok' ? "bg-success/40" : 
+                                      iss.status === 'warning' ? "bg-warning animate-pulse" : 
+                                      iss.status === 'expired' ? "bg-destructive" : "bg-muted"
+                                    )} 
                                   />
-                                </div>
-                              )}
-                              <div className="text-[10px] text-muted-foreground font-medium">
-                                {["on-duty", "on-time", "moving", "delayed", "emergency"].includes(v.status) && v.speed ? `${Math.round(v.speed)} km/h` : "Stationary"}
+                                ))}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                {hasCritical ? (
+                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-destructive/10 text-destructive text-[9px] font-black uppercase tracking-tighter shadow-sm">
+                                    <AlertTriangle className="h-2.5 w-2.5" /> CRITICAL EXPIRED
+                                  </div>
+                                ) : hasWarning ? (
+                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-warning/10 text-warning text-[9px] font-black uppercase tracking-tighter">
+                                    <Clock className="h-2.5 w-2.5" /> EXPIRING SOON
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1 py-0.5 px-2 rounded-md bg-success/10 text-success text-[9px] font-black uppercase tracking-tighter">
+                                    <CheckCircle2 className="h-2.5 w-2.5" /> COMPLIANT
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </td>
                           <td className="px-5 py-4">
                             <div className="flex items-center justify-end gap-1">
-                              <button onClick={() => setEditingVehicle(v)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
+                              <button onClick={() => setEditingVehicle(v)} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-muted transition-all active:scale-90" title="Edit">
                                 <Pencil className="h-4 w-4 text-muted-foreground" />
                               </button>
                               <button onClick={() => {
-                                if (confirm(`Delete vehicle "${v.plate_number || v.id}"?`)) {
+                                if (confirm(`Confirm deletion of vehicle ${v.plate_number || v.id}? This action cannot be undone.`)) {
                                   fetch("/api/vehicles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vehicle_id: v.id }) })
-                                    .then(() => { showToast("Vehicle deleted"); fetchVehicles() })
+                                    .then(() => { showToast("Vehicle removed"); fetchVehicles() })
                                 }
-                              }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
-                                <Trash2 className="h-4 w-4 text-destructive" />
+                              }} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-destructive/10 group transition-all active:scale-90" title="Delete">
+                                <Trash2 className="h-4 w-4 text-destructive opacity-70 group-hover:opacity-100" />
                               </button>
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        )})}
                       {filteredVehicles.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="py-20 text-center text-muted-foreground">
-                            <p className="text-sm">No vehicles match the current filters.</p>
+                          <td colSpan={5} className="py-24 text-center">
+                            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                              <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-1">
+                                <Bus className="h-6 w-6 opacity-20" />
+                              </div>
+                              <p className="text-sm font-bold">No vehicles found</p>
+                              <p className="text-xs">Try adjusting your search or filters</p>
+                            </div>
                           </td>
                         </tr>
                       )}

@@ -7,7 +7,11 @@ export async function POST(req: NextRequest) {
     try {
         const {
             vehicle_id, organization_id, admin_email, admin_id,
-            plateNumber, type, capacity, driverName, driverId, fuelType
+            plateNumber, type, capacity, driverName, driverId, fuelType,
+            brand_model, year, backup_driver_id, backup_driver_name,
+            rc_expiry, insurance_expiry, puc_expiry, fitness_expiry, permit_expiry,
+            last_service_date, next_service_due_date, odometer,
+            gps_device_id, rfid_device_id, camera_installed, panic_button_available
         } = await req.json();
 
         if (!vehicle_id || !organization_id) {
@@ -24,6 +28,23 @@ export async function POST(req: NextRequest) {
         if (driverName !== undefined) updateData.driver_name = driverName;
         if (driverId !== undefined) updateData.driver_id = driverId;
         if (fuelType !== undefined) updateData.fuel_type = fuelType;
+
+        if (brand_model !== undefined) updateData.brand_model = brand_model;
+        if (year !== undefined) updateData.year = year;
+        if (backup_driver_id !== undefined) updateData.backup_driver_id = backup_driver_id;
+        if (backup_driver_name !== undefined) updateData.backup_driver_name = backup_driver_name;
+        if (rc_expiry !== undefined) updateData.rc_expiry = rc_expiry;
+        if (insurance_expiry !== undefined) updateData.insurance_expiry = insurance_expiry;
+        if (puc_expiry !== undefined) updateData.puc_expiry = puc_expiry;
+        if (fitness_expiry !== undefined) updateData.fitness_expiry = fitness_expiry;
+        if (permit_expiry !== undefined) updateData.permit_expiry = permit_expiry;
+        if (last_service_date !== undefined) updateData.last_service_date = last_service_date;
+        if (next_service_due_date !== undefined) updateData.next_service_due_date = next_service_due_date;
+        if (odometer !== undefined) updateData.odometer = odometer;
+        if (gps_device_id !== undefined) updateData.gps_device_id = gps_device_id;
+        if (rfid_device_id !== undefined) updateData.rfid_device_id = rfid_device_id;
+        if (camera_installed !== undefined) updateData.camera_installed = !!camera_installed;
+        if (panic_button_available !== undefined) updateData.panic_button_available = !!panic_button_available;
 
         await vehicleRef.update(updateData);
 
