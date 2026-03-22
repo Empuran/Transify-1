@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import { createAuditLog } from "@/lib/audit-logger";
+import { createAuditLog, getChangedFieldLabels } from "@/lib/audit-logger";
 
 // POST /api/drivers/update — update a driver
 export async function POST(req: NextRequest) {
     try {
         const {
             driver_id, organization_id, admin_email, admin_id,
-            name, phone, licenseNumber, vehicleId, licenseType
+            name, phone, licenseNumber, vehicleId, licenseType,
+            address, photo_url, join_date
         } = await req.json();
 
         if (!driver_id || !organization_id) {
@@ -24,6 +25,9 @@ export async function POST(req: NextRequest) {
         if (licenseNumber !== undefined) updateData.license_number = licenseNumber;
         if (vehicleId !== undefined) updateData.vehicle_id = vehicleId;
         if (licenseType !== undefined) updateData.license_type = licenseType;
+        if (address !== undefined) updateData.address = address;
+        if (photo_url !== undefined) updateData.photo_url = photo_url;
+        if (join_date !== undefined) updateData.join_date = join_date;
 
         await driverRef.update(updateData);
 
@@ -93,9 +97,7 @@ export async function POST(req: NextRequest) {
             await batch.commit();
         }
 
-        const changedFields = Object.keys(updateData)
-            .filter(k => k !== 'updated_at')
-            .filter(k => JSON.stringify(updateData[k]) !== JSON.stringify(oldData?.[k]));
+        const changedLabels = getChangedFieldLabels(updateData, oldData);
 
         await createAuditLog({
             action: "update",
@@ -104,7 +106,7 @@ export async function POST(req: NextRequest) {
             admin_id: admin_id || admin_email || "unknown",
             admin_email: admin_email || "",
             organization_id,
-            details: `Updated driver ${name || oldData?.name}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`
+            details: `Updated driver ${name || oldData?.name}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`
         });
 
         return NextResponse.json({ success: true, message: "Driver updated and synced" });

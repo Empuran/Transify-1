@@ -39,6 +39,7 @@ interface ChildInfo {
   school: string
   route: string
   vehicle: string
+  photo_url?: string | null
 }
 
 // ── Modals ────────────────────────────────────────────────────────────────────
@@ -241,6 +242,7 @@ export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: 
             school: data.organization || data.school || "School",
             route,
             vehicle,
+            photo_url: data.photo_url || null,
           }
         }))
         setChildren(results)
@@ -321,8 +323,12 @@ export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: 
             ) : (
               children.map((child) => (
                 <div key={child.id} className="flex items-center gap-3 px-4 py-3 border-t border-border first:border-0">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                    <Baby className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 overflow-hidden ring-1 ring-primary/20">
+                    {child.photo_url ? (
+                        <img src={child.photo_url} alt={child.name} className="h-full w-full object-cover" />
+                    ) : (
+                        <Baby className="h-5 w-5 text-primary" />
+                    )}
                   </div>
                   <div className="flex flex-1 flex-col min-w-0">
                     <span className="text-sm font-semibold text-foreground">{child.name}</span>

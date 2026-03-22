@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import { createAuditLog } from "@/lib/audit-logger";
+import { createAuditLog, getChangedFieldLabels } from "@/lib/audit-logger";
 
 // POST /api/vehicles/update — update a vehicle
 export async function POST(req: NextRequest) {
@@ -73,9 +73,7 @@ export async function POST(req: NextRequest) {
             await routeBatch.commit();
         }
 
-        const changedFields = Object.keys(updateData)
-            .filter(k => k !== 'updated_at')
-            .filter(k => JSON.stringify(updateData[k]) !== JSON.stringify(oldData?.[k]));
+        const changedLabels = getChangedFieldLabels(updateData, oldData);
 
         await createAuditLog({
             action: "update",
@@ -84,7 +82,7 @@ export async function POST(req: NextRequest) {
             admin_id: admin_id || admin_email || "unknown",
             admin_email: admin_email || "",
             organization_id,
-            details: `Updated vehicle ${plateNumber || oldData?.plate_number}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`
+            details: `Updated vehicle ${plateNumber || oldData?.plate_number}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`
         });
 
         return NextResponse.json({ success: true, message: "Vehicle updated" });

@@ -16,6 +16,7 @@ import {
   MessageSquare,
   Send,
   Loader2,
+  User,
 } from "lucide-react"
 import { StatusBadge } from "./status-badge"
 import { useAuth } from "@/hooks/use-auth"
@@ -39,6 +40,7 @@ interface ChildData {
   status: "on-time" | "delayed" | "emergency" | "active"
   boarding_point?: { name: string; lat: number; lng: number } | null
   dropoff_point?: { name: string; lat: number; lng: number } | null
+  photo_url?: string | null
 }
 
 // Resolves raw Firestore IDs to human-readable vehicle plates, drivers, and route names
@@ -47,6 +49,7 @@ const resolveStudentData = async (rawStudents: Array<{
   vehicleId: string, rawRoute: string, routeId?: string
   boarding_point?: { name: string; lat: number; lng: number } | null
   dropoff_point?: { name: string; lat: number; lng: number } | null
+  photo_url?: string | null
 }>): Promise<ChildData[]> => {
   const resolved = await Promise.all(
     rawStudents.map(async (s) => {
@@ -99,6 +102,7 @@ const resolveStudentData = async (rawStudents: Array<{
         status: "on-time" as const,
         boarding_point: s.boarding_point,
         dropoff_point: s.dropoff_point,
+        photo_url: s.photo_url,
       } as ChildData & { orgId: string }
     })
   )
@@ -189,6 +193,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       routeId: string;
       boarding_point?: { name: string; lat: number; lng: number } | null;
       dropoff_point?: { name: string; lat: number; lng: number } | null;
+      photo_url?: string | null;
     }> = []
 
     const processSnapshot = async () => {
@@ -220,6 +225,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
               routeId: data.route_id || "",
               boarding_point: data.boarding_point || null,
               dropoff_point: data.dropoff_point || null,
+              photo_url: data.photo_url || null,
             })
             changed = true
           }
@@ -619,10 +625,15 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
           disabled={!students.length}
           className="mt-3 flex w-full items-center gap-3 rounded-xl bg-secondary px-4 py-3 transition-colors active:bg-accent disabled:opacity-50"
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-            <Bus className="h-4 w-4 text-primary" />
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 overflow-hidden ring-2 ring-primary/20">
+            {selectedChild?.photo_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={selectedChild.photo_url} alt={selectedChild.name} className="h-full w-full object-cover" />
+            ) : (
+                <User className="h-5 w-5 text-primary" />
+            )}
           </div>
-          <div className="flex flex-1 flex-col items-start">
+          <div className="flex flex-1 flex-col items-start px-2">
             <div className="flex items-center gap-2 text-left">
               <span className="text-sm font-semibold text-foreground">
                 {selectedChild?.name || (students.length ? "Select a student" : "Loading students...")}
@@ -662,10 +673,15 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
                     : "text-foreground hover:bg-muted"
                 )}
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                  <span className="text-xs font-bold text-primary">
-                    {child.name.charAt(0)}
-                  </span>
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 overflow-hidden">
+                  {child.photo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={child.photo_url} alt={child.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="text-xs font-bold text-primary">
+                      {child.name.charAt(0)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-col items-start">
                   <span className="text-sm font-medium">{child.name}</span>

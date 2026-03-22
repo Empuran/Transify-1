@@ -1,6 +1,7 @@
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithCustomToken, signInAnonymously, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -18,5 +19,6 @@ const isConfigured = typeof window !== "undefined" ? !!process.env.NEXT_PUBLIC_F
 const app = firebaseConfig.apiKey ? (getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]) : null;
 const auth = app ? getAuth(app) : ({} as any);
 const db = app ? getFirestore(app, "transifydb") : ({} as any);
+const storage = app ? getStorage(app) : ({} as any);
 
-export { app, auth, db, signInWithCustomToken, signInAnonymously, RecaptchaVerifier, signInWithPhoneNumber };
+export { app, auth, db, storage, signInWithCustomToken, signInAnonymously, RecaptchaVerifier, signInWithPhoneNumber };

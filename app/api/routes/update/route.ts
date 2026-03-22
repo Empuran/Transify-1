@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import { createAuditLog } from "@/lib/audit-logger";
+import { createAuditLog, getChangedFieldLabels } from "@/lib/audit-logger";
 
 // POST /api/routes/update — update a route
 export async function POST(req: NextRequest) {
@@ -92,9 +92,7 @@ export async function POST(req: NextRequest) {
 
         // ── Audit Log ────────────────────────────────────────────────────────
         if (admin_id && admin_email) {
-            const changedFields = Object.keys(updateData)
-                .filter(k => k !== 'updated_at')
-                .filter(k => JSON.stringify(updateData[k]) !== JSON.stringify(oldData?.[k]));
+            const changedLabels = getChangedFieldLabels(updateData, oldData);
 
             await createAuditLog({
                 action: "update",
@@ -103,7 +101,7 @@ export async function POST(req: NextRequest) {
                 admin_id,
                 admin_email,
                 organization_id,
-                details: `Updated route ${routeName || oldData?.route_name}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`
+                details: `Updated route ${routeName || oldData?.route_name}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`
             });
         }
 

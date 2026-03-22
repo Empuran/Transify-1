@@ -153,6 +153,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const [realName, setRealName] = useState("")
   const [driverId, setDriverId] = useState("")
   const [driverPhone, setDriverPhone] = useState("")
+  const [driverPhoto, setDriverPhoto] = useState("")
   const [assignedVehicleId, setAssignedVehicleId] = useState<string>("")
   const [isVerifying, setIsVerifying] = useState(true)
   const [currentRoute, setCurrentRoute] = useState<any>(null)
@@ -406,6 +407,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
           setRealName(currentDriver.name)
           setDriverId(currentDriver.id)
           setDriverPhone(currentDriver.phone || profile.phone || "")
+          setDriverPhoto(currentDriver.photo_url || "")
           
           const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
           if (targetVehId && targetVehId !== "Unassigned") {
@@ -791,8 +793,13 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
                 <Clock className="h-3.5 w-3.5" /> Delay
               </button>
             )}
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-foreground/20">
-              <span className="text-sm font-bold text-primary-foreground">{initials}</span>
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-foreground/20 overflow-hidden shrink-0 ring-2 ring-white/10">
+              {driverPhoto ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={driverPhoto} alt={userName} className="h-full w-full object-cover" />
+              ) : (
+                <span className="text-sm font-bold text-primary-foreground">{initials}</span>
+              )}
             </div>
           </div>
         </div>
@@ -985,7 +992,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
       {/* ── Sign Out ─────────────────────────────────────────────────── */}
       <div className="mx-4 mt-4">
-        <button onClick={() => { logoutMock(); router.push("/category") }}
+        <button onClick={() => { logoutMock("driver"); router.push("/category") }}
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3.5 transition-colors active:bg-destructive/10">
           <LogOut className="h-4 w-4 text-destructive" />
           <span className="text-sm font-semibold text-destructive">Sign Out</span>

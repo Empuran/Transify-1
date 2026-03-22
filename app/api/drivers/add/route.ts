@@ -5,7 +5,7 @@ import { createAuditLog } from "@/lib/audit-logger";
 // POST /api/drivers/add — register a new driver
 export async function POST(req: NextRequest) {
     try {
-        const { name, phone, licenseNumber, vehicleId, organization, licenseType, organization_id, admin_email, admin_id } = await req.json();
+        const { name, phone, licenseNumber, vehicleId, organization, licenseType, organization_id, admin_email, admin_id, address, photo_url, join_date } = await req.json();
 
         if (!name || !phone || !organization_id) {
             return NextResponse.json(
@@ -23,6 +23,12 @@ export async function POST(req: NextRequest) {
             organization: organization || "",
             organization_id,
             status: "off-duty",
+            lifecycle_status: "ACTIVE",
+            address: address || "",
+            photo_url: photo_url || "",
+            join_date: join_date || new Date().toISOString().split("T")[0],
+            leave_date: null,
+            removal_reason: null,
             created_at: new Date().toISOString(),
         };
 

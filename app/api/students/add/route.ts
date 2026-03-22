@@ -6,7 +6,7 @@ import { createAuditLog } from "@/lib/audit-logger";
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { name, grade, section, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name } = body;
+        const { name, grade, section, memberId, parentPhone, route, vehicle_id, organization, organization_id, admin_email, admin_name, address, photo_url, join_date } = body;
 
         if (!name || !organization_id) {
             return NextResponse.json(
@@ -57,6 +57,12 @@ export async function POST(req: NextRequest) {
             organization: organization || "",
             organization_id,
             status: "active",
+            lifecycle_status: "ACTIVE",
+            address: address || "",
+            photo_url: photo_url || "",
+            join_date: join_date || new Date().toISOString().split("T")[0],
+            leave_date: null,
+            removal_reason: null,
             boarding_point: body.boarding_point || null,
             dropoff_point: body.dropoff_point || null,
             created_at: new Date().toISOString(),

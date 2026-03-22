@@ -19,7 +19,7 @@ export default function ParentDashboardPage() {
     const router = useRouter()
 
     const handleLogout = () => {
-        logoutMock()
+        logoutMock("guardian")
         router.push("/category")
     }
 

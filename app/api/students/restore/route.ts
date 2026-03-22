@@ -2,16 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { createAuditLog } from "@/lib/audit-logger";
 
-// DELETE /api/students/delete — soft-delete a student (sets lifecycle_status=INACTIVE)
-export async function DELETE(req: NextRequest) {
+// POST /api/students/restore — restore an INACTIVE student back to ACTIVE
+export async function POST(req: NextRequest) {
     try {
-        const { id, admin_email, admin_name, organization_id, removal_reason } = await req.json();
+        const { id, admin_email, admin_name, organization_id } = await req.json();
 
         if (!id || !organization_id) {
             return NextResponse.json({ error: "id and organization_id are required" }, { status: 400 });
-        }
-        if (!removal_reason?.trim()) {
-            return NextResponse.json({ error: "removal_reason is required" }, { status: 400 });
         }
 
         const ref = adminDb.collection("students").doc(id);
@@ -25,39 +22,38 @@ export async function DELETE(req: NextRequest) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
         }
 
-        const leaveDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+        const restoreDate = new Date().toISOString().split("T")[0];
 
         await ref.update({
-            lifecycle_status: "INACTIVE",
-            leave_date: leaveDate,
-            removal_reason: removal_reason.trim(),
+            lifecycle_status: "ACTIVE",
+            leave_date: null,
+            removal_reason: null,
             updated_at: new Date().toISOString(),
         });
 
         // Write lifecycle history entry
         await ref.collection("lifecycle_history").add({
-            status: "INACTIVE",
-            start_date: leaveDate,
-            reason: removal_reason.trim(),
+            status: "ACTIVE",
+            start_date: restoreDate,
+            reason: "Restored by admin",
             changed_by: admin_email || "",
-            snapshot_data: existing,
             timestamp: new Date().toISOString(),
         });
 
         await createAuditLog({
-            action: "delete",
+            action: "update",
             entity_type: "student",
             entity_id: id,
             admin_id: admin_email || "",
             admin_name: admin_name || "",
             admin_email: admin_email || "",
             organization_id,
-            details: `Removed student ${existing?.name || id} — Reason: ${removal_reason.trim()}`,
+            details: `Restored student ${existing?.name || id} to active status`,
         });
 
-        return NextResponse.json({ success: true, message: "Student removed" });
+        return NextResponse.json({ success: true, message: "Student restored" });
     } catch (error: any) {
-        console.error("Delete student error:", error);
+        console.error("Restore student error:", error);
         return NextResponse.json({ error: error.message || "Internal error" }, { status: 500 });
     }
 }

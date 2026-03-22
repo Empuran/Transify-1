@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import { createAuditLog } from "@/lib/audit-logger";
+import { createAuditLog, getChangedFieldLabels } from "@/lib/audit-logger";
 
 // PUT /api/students/update — update a student/employee
 export async function PUT(req: NextRequest) {
@@ -24,17 +24,24 @@ export async function PUT(req: NextRequest) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
         }
 
+        // Map form camelCase fields to Firestore snake_case field names
+        const fieldMap: Record<string, string> = {
+            parentPhone: "parent_phone",
+        };
+
         const cleanUpdates: Record<string, any> = {};
         for (const [k, v] of Object.entries(updates)) {
-            if (v !== undefined) cleanUpdates[k] = v;
+            if (v !== undefined) {
+                const firestoreKey = fieldMap[k] ?? k;
+                cleanUpdates[firestoreKey] = v;
+            }
         }
         cleanUpdates.updated_at = new Date().toISOString();
 
         await ref.update(cleanUpdates);
 
-        const changedFields = Object.keys(cleanUpdates)
-            .filter(k => k !== 'updated_at')
-            .filter(k => JSON.stringify(cleanUpdates[k]) !== JSON.stringify(existing?.[k]));
+        // Compute labels of actually changed fields for the audit log
+        const changedLabels = getChangedFieldLabels(cleanUpdates, existing);
 
         await createAuditLog({
             action: "update",
@@ -44,7 +51,7 @@ export async function PUT(req: NextRequest) {
             admin_name: admin_name || "",
             admin_email: admin_email || "",
             organization_id,
-            details: `Updated student ${existing?.name || id}${changedFields.length > 0 ? ': ' + changedFields.join(', ') : ''}`,
+            details: `Updated student ${existing?.name || id}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`,
         });
 
         return NextResponse.json({ success: true, message: "Student updated" });

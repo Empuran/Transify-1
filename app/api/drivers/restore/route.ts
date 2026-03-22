@@ -2,16 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { createAuditLog } from "@/lib/audit-logger";
 
-// POST /api/drivers/delete — soft-delete a driver (sets lifecycle_status=INACTIVE)
+// POST /api/drivers/restore — restore an INACTIVE driver back to ACTIVE
 export async function POST(req: NextRequest) {
     try {
-        const { driver_id, admin_email, admin_name, organization_id, removal_reason } = await req.json();
+        const { driver_id, admin_email, admin_name, organization_id } = await req.json();
 
         if (!driver_id) {
             return NextResponse.json({ error: "driver_id is required" }, { status: 400 });
-        }
-        if (!removal_reason?.trim()) {
-            return NextResponse.json({ error: "removal_reason is required" }, { status: 400 });
         }
 
         const ref = adminDb.collection("drivers").doc(driver_id);
@@ -21,41 +18,39 @@ export async function POST(req: NextRequest) {
         }
 
         const existing = snap.data();
-        const leaveDate = new Date().toISOString().split("T")[0];
+        const restoreDate = new Date().toISOString().split("T")[0];
 
         await ref.update({
-            lifecycle_status: "INACTIVE",
-            leave_date: leaveDate,
-            removal_reason: removal_reason.trim(),
+            lifecycle_status: "ACTIVE",
+            leave_date: null,
+            removal_reason: null,
             updated_at: new Date().toISOString(),
         });
 
-        // Write lifecycle history entry
         await ref.collection("lifecycle_history").add({
-            status: "INACTIVE",
-            start_date: leaveDate,
-            reason: removal_reason.trim(),
+            status: "ACTIVE",
+            start_date: restoreDate,
+            reason: "Restored by admin",
             changed_by: admin_email || "",
-            snapshot_data: existing,
             timestamp: new Date().toISOString(),
         });
 
         if (admin_email && organization_id) {
             await createAuditLog({
-                action: "delete",
+                action: "update",
                 entity_type: "driver",
                 entity_id: driver_id,
                 admin_id: admin_email,
                 admin_name: admin_name || "",
                 admin_email,
                 organization_id,
-                details: `Removed driver ${existing?.name || driver_id} — Reason: ${removal_reason.trim()}`,
+                details: `Restored driver ${existing?.name || driver_id} to active status`,
             });
         }
 
-        return NextResponse.json({ success: true, message: "Driver removed" });
+        return NextResponse.json({ success: true, message: "Driver restored" });
     } catch (error: any) {
-        console.error("Delete driver error:", error);
+        console.error("Restore driver error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

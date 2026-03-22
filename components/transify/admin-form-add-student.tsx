@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus, MapPin, Loader2 } from "lucide-react"
+import { X, GraduationCap, Phone, Hash, Route, Building2, ChevronDown, Check, User, Briefcase, Bus, MapPin, Loader2, Home, Camera, Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { compressImage } from "@/lib/utils"
 
 interface AddStudentFormProps {
     initialData?: any
@@ -25,9 +26,17 @@ export interface StudentData {
     boarding_point?: { name: string; lat: number; lng: number } | null
     dropoff_point?: { name: string; lat: number; lng: number } | null
     section?: string
+    address?: string
+    photo_url?: string
+    join_date?: string
 }
 
-const gradeOptions = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "Year 1", "Year 2", "Year 3", "Year 4"]
+const gradeOptions = [
+  "Play School", "LKG", "UKG",
+  "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6",
+  "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12",
+  "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6",
+]
 const deptOptions = ["Engineering", "Design", "Marketing", "HR", "Finance", "Operations", "Legal", "Sales"]
 
 interface RouteStop { name: string; lat: number; lng: number }
@@ -37,16 +46,20 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
     const [data, setData] = useState<StudentData>({
         name: initialData?.name || "",
         grade: initialData?.grade || initialData?.dept || initialData?.department || "",
-        section: initialData?.section || "", // Initialized section
+        section: initialData?.section || "",
         memberId: initialData?.memberId || initialData?.student_id || "",
-        parentPhone: initialData?.parent_phone || initialData?.student_phone || initialData?.phone || "", // Updated parentPhone initialization
-        route: initialData?.route || initialData?.route_name || "Unassigned", // Updated route initialization
+        parentPhone: initialData?.parent_phone || initialData?.student_phone || initialData?.phone || "",
+        route: initialData?.route || initialData?.route_name || "Unassigned",
         route_id: initialData?.route_id || "",
-        vehicle_id: initialData?.vehicle_id || "Unassigned", // Updated vehicle_id initialization
+        vehicle_id: initialData?.vehicle_id || "Unassigned",
         organization: initialData?.organization || "",
         boarding_point: initialData?.boarding_point || null,
         dropoff_point: initialData?.dropoff_point || null,
+        address: initialData?.address || "",
+        photo_url: initialData?.photo_url || "",
+        join_date: initialData?.join_date || "",
     })
+    const [photoFile, setPhotoFile] = useState<File | null>(null)
     const [showGrade, setShowGrade] = useState(false)
     const [showRoute, setShowRoute] = useState(false)
     const [showVehicle, setShowVehicle] = useState(false)
@@ -147,12 +160,17 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
         }
 
         try {
+            let finalPhotoUrl = data.photo_url;
+            if (photoFile) {
+                finalPhotoUrl = await compressImage(photoFile, 500, 500, 0.6);
+            }
+
             const isEditing = !!initialData?.id
             const endpoint = isEditing ? "/api/students/update" : "/api/students/add"
             const method = isEditing ? "PUT" : "POST"
             const payload = isEditing
-                ? { ...data, id: initialData.id, organization_id: orgId, admin_email: adminData?.email, admin_name: adminData?.name }
-                : { ...data, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email, admin_name: adminData?.name }
+                ? { ...data, photo_url: finalPhotoUrl, id: initialData.id, organization_id: orgId, admin_email: adminData?.email, admin_name: adminData?.name }
+                : { ...data, photo_url: finalPhotoUrl, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email, admin_name: adminData?.name }
 
             const res = await fetch(endpoint, {
                 method,
@@ -207,12 +225,12 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     {/* Grade / Department Picker */}
                     <div className="flex flex-col gap-1.5">
                         <label className="text-sm font-semibold text-foreground">{isCorporate ? "Department" : "Class / Grade"}</label>
-                        <div className={cn("grid gap-2", isCorporate ? "grid-cols-1" : "grid-cols-2")}>
+                        <div className={cn("grid gap-2", isCorporate ? "grid-cols-1" : (data.grade === "Play School" ? "grid-cols-1" : "grid-cols-2"))}>
                             <button onClick={() => setShowGrade(!showGrade)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
                                 <span className={cn("text-sm", data.grade ? "text-foreground" : "text-muted-foreground")}>{isCorporate ? (data.grade || "Select department") : (data.grade || "Select class")}</span>
                                 <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showGrade && "rotate-180")} />
                             </button>
-                            {!isCorporate && (
+                            {!isCorporate && data.grade !== "Play School" && (
                                 <button onClick={() => setShowSection(!showSection)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
                                     <span className={cn("text-sm", data.section ? "text-foreground" : "text-muted-foreground")}>{data.section ? `Section ${data.section}` : "Section"}</span>
                                     <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showSection && "rotate-180")} />
@@ -222,12 +240,12 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                         {showGrade && (
                             <div className="mt-1 grid grid-cols-3 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {(isCorporate ? deptOptions : gradeOptions).map((g) => (
-                                    <button key={g} onClick={() => { setData({ ...data, grade: g }); setShowGrade(false) }}
+                                    <button key={g} onClick={() => { setData({ ...data, grade: g, section: g === "Play School" ? "" : data.section }); setShowGrade(false) }}
                                         className={cn("rounded-lg py-2 text-xs font-medium transition-colors", data.grade === g ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground")}>{g}</button>
                                 ))}
                             </div>
                         )}
-                        {!isCorporate && showSection && (
+                        {!isCorporate && data.grade !== "Play School" && showSection && (
                             <div className="mt-1 grid grid-cols-7 gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
                                 {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((s) => (
                                     <button key={s} onClick={() => { setData({ ...data, section: s }); setShowSection(false) }}
@@ -373,6 +391,40 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                             </div>
                         </div>
                     )}
+
+                    {/* Address */}
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-sm font-semibold text-foreground">Address</label>
+                        <div className="relative">
+                            <Home className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input placeholder="Street, City, State" value={data.address || ""} onChange={(e) => setData({ ...data, address: e.target.value })} className="h-12 rounded-xl bg-background pl-10" />
+                        </div>
+                    </div>
+
+                    {/* Photo URL & Join Date */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-semibold text-foreground">Photo</label>
+                            <div className="flex gap-2">
+                                {(photoFile || data.photo_url) && (
+                                    <div className="h-12 w-12 shrink-0 rounded-xl overflow-hidden border border-border bg-muted">
+                                        <img src={photoFile ? URL.createObjectURL(photoFile) : data.photo_url} alt="Photo" className="h-full w-full object-cover" />
+                                    </div>
+                                )}
+                                <div className="relative flex-1">
+                                    <Camera className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                    <Input type="file" accept="image/*" onChange={(e) => setPhotoFile(e.target.files?.[0] || null)} className={cn("h-12 rounded-xl bg-background pt-3 file:hidden", (photoFile || data.photo_url) ? "pl-9 text-[10px]" : "pl-10 text-xs")} />
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <label className="text-sm font-semibold text-foreground">Join Date</label>
+                            <div className="relative">
+                                <Calendar className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                <Input type="date" value={data.join_date || ""} onChange={(e) => setData({ ...data, join_date: e.target.value })} className="h-12 rounded-xl bg-background pl-10" />
+                            </div>
+                        </div>
+                    </div>
 
                     {/* Organization */}
                     <div className="flex flex-col gap-1.5">

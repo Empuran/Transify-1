@@ -20,6 +20,7 @@ import { AddVehicleForm } from "./admin-form-add-vehicle"
 import { AddRouteForm } from "./admin-form-add-route"
 import { AdminManagement } from "./admin-management"
 import { LiveMap } from "./live-map"
+import { RemovalReasonModal } from "./removal-reason-modal"
 import { useRouter } from "next/navigation"
 
 type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
@@ -195,10 +196,78 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
   )
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
+// ── Recent Activity Widget (last 24h from audit_logs) ─────────────────────────
+function RecentActivityWidget({ organizationId, onViewLogs }: { organizationId?: string; onViewLogs: () => void }) {
+  const [logs, setLogs] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
+  useEffect(() => {
+    if (!organizationId) { setLoading(false); return }
+    fetch(`/api/admin/audit-logs?organization_id=${organizationId}&limit=20`)
+      .then(r => r.json())
+      .then(d => {
+        const dayAgo = Date.now() - 24 * 60 * 60 * 1000
+        const recent = (d.logs || []).filter((l: any) => {
+          const t = l.timestamp ? new Date(l.timestamp).getTime() : 0
+          return t >= dayAgo
+        }).slice(0, 5)
+        setLogs(recent)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [organizationId])
 
+  const relTime = (ts: string) => {
+    const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000)
+    if (diff < 60) return "Just now"
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+    return `${Math.floor(diff / 3600)}h ago`
+  }
 
+  const actionIcon = (action: string) => {
+    if (action === "add") return <UserPlus className="h-4 w-4 text-success" />
+    if (action === "delete") return <Trash2 className="h-4 w-4 text-destructive" />
+    if (action === "update") return <Pencil className="h-4 w-4 text-primary" />
+    return <Activity className="h-4 w-4 text-muted-foreground" />
+  }
+  const actionBg = (action: string) => {
+    if (action === "add") return "bg-success/10"
+    if (action === "delete") return "bg-destructive/10"
+    if (action === "update") return "bg-primary/10"
+    return "bg-muted"
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm flex flex-col">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
+        <span className="text-[10px] font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Last 24h</span>
+      </div>
+      <div className="flex flex-col gap-3 flex-1">
+        {loading && <div className="flex justify-center py-6"><div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}
+        {!loading && logs.length === 0 && (
+          <p className="text-xs text-muted-foreground italic py-4 text-center">No activity in the last 24 hours.</p>
+        )}
+        {!loading && logs.map((log: any, i: number) => (
+          <div key={log.id || i} className="flex items-start gap-3">
+            <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", actionBg(log.action))}>
+              {actionIcon(log.action)}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground truncate">{log.details || "Action performed"}</p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <p className="text-[10px] text-muted-foreground truncate">{log.admin_name || log.admin_email || "Admin"}</p>
+                <span className="text-[10px] text-muted-foreground/50">·</span>
+                <p className="text-[10px] text-muted-foreground shrink-0">{log.timestamp ? relTime(log.timestamp) : "—"}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={onViewLogs} className="mt-4 w-full rounded-xl bg-muted/50 p-2.5 text-xs font-semibold text-primary transition-colors hover:bg-muted">View Detailed Logs</button>
+    </div>
+  )
+}
 
 // ── Vehicle Icon Helper ────────────────────────────────────────────────────
 const getVehicleIcon = (type: string = "", capacity: number | string = 0) => {
@@ -213,6 +282,7 @@ const getVehicleIcon = (type: string = "", capacity: number | string = 0) => {
   return Bus
 }
 
+
 export function AdminDashboard() {
   const { profile, logoutMock, adminSession } = useAuth()
   const router = useRouter()
@@ -225,6 +295,12 @@ export function AdminDashboard() {
   const [selectedVehicleCompliance, setSelectedVehicleCompliance] = useState<any>(null)
   const [editingRoute, setEditingRoute] = useState<any>(null)
   const [editingStudent, setEditingStudent] = useState<any>(null)
+
+  // ── Lifecycle / Removal Modal State ─────────────────────────────────────
+  const [removalTarget, setRemovalTarget] = useState<{ entity: any; type: "student" | "driver" } | null>(null)
+  const [removalLoading, setRemovalLoading] = useState(false)
+  const [showRemovedStudents, setShowRemovedStudents] = useState(false)
+  const [showRemovedDrivers, setShowRemovedDrivers] = useState(false)
 
   // ── Date Filtering ──────────────────────────────────────────────────────
   const [dashboardDate, setDashboardDate] = useState<string>(new Date().toISOString().split("T")[0])
@@ -300,7 +376,7 @@ export function AdminDashboard() {
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 3000) }
-  const handleLogout = () => { logoutMock(); router.push("/category") }
+  const handleLogout = () => { logoutMock("admin"); router.push("/category") }
 
   const downloadCSV = (csv: string, filename: string) => {
     if (typeof window === "undefined") return
@@ -357,13 +433,16 @@ export function AdminDashboard() {
   }, [fetchStudents])
 
   const filteredMembers = useMemo(() => studentsData.filter(s => {
+    const isInactive = s.lifecycle_status === "INACTIVE"
+    if (!showRemovedStudents && isInactive) return false
+    if (showRemovedStudents && !isInactive) return false
+
     const name = (s.name || "").toLowerCase()
     const memberId = (s.memberId || s.student_id || s.id || "").toLowerCase()
     const route = s.route || s.route_name || ""
     const gradeString = isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")
     const search = memberSearch.toLowerCase()
     
-    // Section logic: use new explicit section field, fallback to extracting from grade string (e.g. "Class 4 - Z" -> "Z")
     let section = "None"
     if (s.section) {
       section = s.section
@@ -377,7 +456,7 @@ export function AdminDashboard() {
       (memberSectionFilter === "all" || section === memberSectionFilter) &&
       (memberGradeFilter === "all" || gradeString.startsWith(memberGradeFilter))
     )
-  }), [studentsData, memberSearch, memberRouteFilter, memberSectionFilter, memberGradeFilter, isCorporate])
+  }), [studentsData, memberSearch, memberRouteFilter, memberSectionFilter, memberGradeFilter, isCorporate, showRemovedStudents])
 
   // ── Driver Filters ──────────────────────────────────────────────────────
   const [driverSearch, setDriverSearch] = useState("")
@@ -431,11 +510,15 @@ export function AdminDashboard() {
     }
   }, [selectedDriverForReviews, fetchDriverReviews])
 
-  const filteredDrivers = useMemo(() => driversData.filter((d: any) =>
-    (d.name?.toLowerCase().includes(driverSearch.toLowerCase()) || d.phone?.includes(driverSearch)) &&
+  const filteredDrivers = useMemo(() => driversData.filter((d: any) => {
+    const isInactive = d.lifecycle_status === "INACTIVE"
+    if (!showRemovedDrivers && isInactive) return false
+    if (showRemovedDrivers && !isInactive) return false
+
+    return (d.name?.toLowerCase().includes(driverSearch.toLowerCase()) || d.phone?.includes(driverSearch)) &&
     (driverStatusFilter === "all" || d.status === driverStatusFilter) &&
     (driverLicenseFilter === "all" || d.license_type === driverLicenseFilter)
-  ), [driverSearch, driverStatusFilter, driverLicenseFilter, driversData])
+  }), [driverSearch, driverStatusFilter, driverLicenseFilter, driversData, showRemovedDrivers])
 
   // ── Vehicle Filters ─────────────────────────────────────────────────────
   const [vehicleSearch, setVehicleSearch] = useState("")
@@ -600,7 +683,6 @@ export function AdminDashboard() {
   const handleClearAll = async () => {
     const orgId = adminSession?.organization_id
     if (!orgId || notifications.length === 0) return
-    if (!confirm("Are you sure you want to clear all notifications?")) return
 
     try {
       const batch = writeBatch(db)
@@ -614,13 +696,14 @@ export function AdminDashboard() {
       })
       await batch.commit()
       showToast("Notifications cleared")
+      setShowNotifications(false)
     } catch (err) {
       console.error("Clear all error:", err)
     }
   }
 
   const badgeCount = useMemo(() => 
-    notifications.filter((n: any) => !n.is_cleared && !n.is_read && (n.priority === 'warning' || n.priority === 'critical')).length
+    notifications.filter((n: any) => !n.is_cleared && !n.is_read).length
   , [notifications])
 
   const sortedNotifications = useMemo(() => {
@@ -1095,38 +1178,7 @@ export function AdminDashboard() {
               })()}
 
               <div className="grid gap-4 lg:grid-cols-2">
-                {isSuperAdmin && (
-                  <div className="rounded-2xl border border-border bg-card p-5 shadow-sm flex flex-col">
-                    <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
-                    <div className="flex flex-col gap-4 flex-1">
-                      {[...driversData]
-                        .filter(d => d.created_at)
-                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                        .slice(0, 5)
-                        .map((d: any, i) => {
-                          const diffMs = Date.now() - new Date(d.created_at).getTime()
-                          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-                          const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-                          const diffMins = Math.floor(diffMs / (1000 * 60))
-                          const relativeTime = diffDays > 0 ? `${diffDays} day${diffDays > 1 ? 's' : ''} ago` : diffHours > 0 ? `${diffHours} hour${diffHours > 1 ? 's' : ''} ago` : diffMins > 0 ? `${diffMins} min${diffMins > 1 ? 's' : ''} ago` : "Just now"
-
-                          return (
-                            <div key={i} className="flex items-start gap-3">
-                              <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10")}>
-                                <UserPlus className={cn("h-4 w-4 text-primary")} />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm text-foreground">{d.name} onboarded</p>
-                                <p className="text-xs text-muted-foreground">{relativeTime}</p>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      {driversData.length === 0 && <p className="text-xs text-muted-foreground italic">No recent activity found.</p>}
-                    </div>
-                    <button onClick={() => setSection("admins")} className="mt-4 w-full rounded-xl bg-muted/50 p-2.5 text-xs font-semibold text-primary transition-colors hover:bg-muted">View Detailed Logs</button>
-                  </div>
-                )}
+                {isSuperAdmin && <RecentActivityWidget organizationId={adminSession?.organization_id} onViewLogs={() => setSection("admins")} />}
               </div>
 
               {/* Quick Actions */}
@@ -1277,7 +1329,7 @@ export function AdminDashboard() {
                 <FilterDropdown label="Route" options={[...new Set(studentsData.map(s => s.route || s.route_name || "").filter(Boolean))]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
                 <FilterDropdown 
                   label="Section" 
-                  options={isCorporate ? [] : ["A", "B", "C", "D", "E", "F", "G", "H"]} 
+                  options={isCorporate ? [] : "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")} 
                   value={memberSectionFilter} 
                   onChange={setMemberSectionFilter} 
                 />
@@ -1287,7 +1339,21 @@ export function AdminDashboard() {
                     <X className="h-3 w-3" />Clear
                   </button>
                 )}
-                <span className="ml-auto text-xs text-muted-foreground">{filteredMembers.length} of {studentsData.length}</span>
+                <div className="ml-auto flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">Show Removed</span>
+                    <button 
+                      onClick={() => setShowRemovedStudents(!showRemovedStudents)} 
+                      className={cn("relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none", showRemovedStudents ? "bg-primary" : "bg-muted")}
+                    >
+                      <span aria-hidden="true" className={cn("pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", showRemovedStudents ? "translate-x-3.5" : "-translate-x-0.5")} />
+                    </button>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => window.open(`/api/students/export?organization_id=${adminSession?.organization_id}&status=${showRemovedStudents ? 'inactive' : 'active'}`, '_blank')} className="h-9 gap-2">
+                    <Download className="h-4 w-4" /> Export CSV
+                  </Button>
+                  <span className="text-xs text-muted-foreground ml-2">{filteredMembers.length} of {studentsData.length}</span>
+                </div>
               </div>
 
               <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
@@ -1322,26 +1388,27 @@ export function AdminDashboard() {
                               className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
-                            <button onClick={async () => {
-                              if (!confirm(`Delete ${s.name || 'this student'}? This cannot be undone.`)) return
-                              try {
-                                const res = await fetch('/api/students/delete', {
-                                  method: 'DELETE',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({
-                                    id: s.id,
-                                    organization_id: adminSession?.organization_id,
-                                    admin_email: userEmail,
-                                    admin_name: userName,
+                            {s.lifecycle_status === "INACTIVE" ? (
+                              <button onClick={async () => {
+                                if (!confirm(`Restore ${s.name || 'this student'}?`)) return
+                                try {
+                                  const res = await fetch('/api/students/restore', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: s.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName })
                                   })
-                                })
-                                if (!res.ok) throw new Error((await res.json()).error)
-                                showToast(`${s.name || 'Student'} deleted`)
-                              } catch (err: any) { alert(err.message || 'Delete failed') }
-                            }}
-                              className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                                  if (!res.ok) throw new Error((await res.json()).error)
+                                  showToast(`${s.name || 'Student'} restored`)
+                                } catch (err: any) { alert(err.message || 'Restore failed') }
+                              }} className="p-1.5 rounded-lg text-muted-foreground hover:text-success hover:bg-success/10 transition-colors" title="Restore">
+                                <Activity className="h-3.5 w-3.5" />
+                              </button>
+                            ) : (
+                              <button onClick={() => setRemovalTarget({ entity: s, type: "student" })}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="Remove">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1378,7 +1445,21 @@ export function AdminDashboard() {
                     <X className="h-3 w-3" />Clear
                   </button>
                 )}
-                <span className="ml-auto text-xs text-muted-foreground">{filteredDrivers.length} of {driversData.length}</span>
+                <div className="ml-auto flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">Show Removed</span>
+                    <button 
+                      onClick={() => setShowRemovedDrivers(!showRemovedDrivers)} 
+                      className={cn("relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none", showRemovedDrivers ? "bg-primary" : "bg-muted")}
+                    >
+                      <span aria-hidden="true" className={cn("pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", showRemovedDrivers ? "translate-x-3.5" : "-translate-x-0.5")} />
+                    </button>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => window.open(`/api/drivers/export?organization_id=${adminSession?.organization_id}&status=${showRemovedDrivers ? 'inactive' : 'active'}`, '_blank')} className="h-9 gap-2">
+                    <Download className="h-4 w-4" /> Export CSV
+                  </Button>
+                  <span className="text-xs text-muted-foreground ml-2">{filteredDrivers.length} of {driversData.length}</span>
+                </div>
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -1430,14 +1511,23 @@ export function AdminDashboard() {
                               <button onClick={() => setEditingDriver(d)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
                                 <Pencil className="h-4 w-4 text-muted-foreground" />
                               </button>
-                              <button onClick={() => {
-                                if (confirm(`Delete driver "${d.name}"?`)) {
-                                  fetch("/api/drivers/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id }) })
-                                    .then(() => { showToast("Driver deleted"); fetchDrivers() })
-                                }
-                              }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </button>
+                              {d.lifecycle_status === "INACTIVE" ? (
+                                <button onClick={async () => {
+                                  if (!confirm(`Restore driver "${d.name}"?`)) return
+                                  try {
+                                    const res = await fetch("/api/drivers/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName }) })
+                                    if (!res.ok) throw new Error((await res.json()).error)
+                                    showToast("Driver restored")
+                                  } catch (err: any) { alert(err.message || "Restore failed") }
+                                }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-success/10 transition-colors" title="Restore">
+                                  <Activity className="h-4 w-4 text-success" />
+                                </button>
+                              ) : (
+                                <button onClick={() => setRemovalTarget({ entity: d, type: "driver" })}
+                                  className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Remove">
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -2296,6 +2386,39 @@ export function AdminDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* LIFECYCLE REMOVAL MODAL */}
+      {removalTarget && (
+        <RemovalReasonModal
+          entityType={removalTarget.type}
+          entityName={removalTarget.entity.name}
+          isLoading={removalLoading}
+          onCancel={() => setRemovalTarget(null)}
+          onConfirm={async (reason) => {
+            setRemovalLoading(true)
+            try {
+              const endpoint = removalTarget.type === "student" ? "/api/students/delete" : "/api/drivers/delete"
+              const method = removalTarget.type === "student" ? "DELETE" : "POST"
+              const payload = removalTarget.type === "student" 
+                ? { id: removalTarget.entity.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName, removal_reason: reason }
+                : { driver_id: removalTarget.entity.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName, removal_reason: reason }
+              
+              const res = await fetch(endpoint, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              })
+              if (!res.ok) throw new Error((await res.json()).error)
+              showToast(`${removalTarget.type === "student" ? "Student" : "Driver"} removed (status: INACTIVE)`)
+            } catch (err: any) {
+              alert(err.message || 'Removal failed')
+            } finally {
+              setRemovalLoading(false)
+              setRemovalTarget(null)
+            }
+          }}
+        />
       )}
 
     </div>

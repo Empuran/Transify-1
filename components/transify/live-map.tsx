@@ -257,8 +257,13 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
         );
     }
 
-    const center = vehicles.length > 0
-        ? { lat: vehicles[0].latitude, lng: vehicles[0].longitude }
+    const validVehicles = vehicles.filter(v => 
+        typeof v.latitude === 'number' && typeof v.longitude === 'number' && 
+        !isNaN(v.latitude) && !isNaN(v.longitude)
+    );
+
+    const center = validVehicles.length > 0
+        ? { lat: validVehicles[0].latitude, lng: validVehicles[0].longitude }
         : dynamicCenter;
 
     // Stop label alphabet
@@ -291,7 +296,7 @@ export function LiveMap({ organizationId, vehicleMeta = {}, routeStops = [], sho
             onClick={() => setSelectedVehicleId(null)}
         >
             {/* ── Vehicle markers ─────────────────────────────────────── */}
-            {vehicles.filter(v => {
+            {validVehicles.filter(v => {
                 if (!filterToMeta) return true;
                 return vehicleMeta[v.id] || vehicleMeta[v.plate_number || ""] || Object.values(vehicleMeta).find(m => m.plate_number === v.plate_number);
             }).map((v) => {

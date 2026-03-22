@@ -51,7 +51,7 @@ interface AuthContextType {
     setActiveOrg: (orgId: string) => void
     loginMock: (role: UserRole, orgCategory?: OrgCategory, phone?: string, name?: string) => void
     loginAdmin: (customToken: string, adminData: AdminSession) => Promise<void>
-    logoutMock: () => void
+    logoutMock: (roleToLogout?: UserRole) => void
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -160,15 +160,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInAnonymously(auth).catch(err => console.error("Anonymous auth failed:", err))
     }
 
-    const logoutMock = () => {
+    const logoutMock = (roleToLogout?: UserRole) => {
+        if (typeof window !== "undefined") {
+            if (roleToLogout === "admin") {
+                sessionStorage.removeItem("transify_admin_session")
+                setAdminSession(null)
+                // If there's no driver/parent mock profile active globally, we can safely sign out of Firebase
+                if (!sessionStorage.getItem("transify_mock_profile")) {
+                    auth.signOut().catch(() => {})
+                }
+                return;
+            }
+            if (roleToLogout === "driver" || roleToLogout === "guardian") {
+                 sessionStorage.removeItem("transify_mock_profile")
+                 // If there's no admin session in this browser, sign out of firebase
+                 if (!sessionStorage.getItem("transify_admin_session")) {
+                     auth.signOut().catch(() => {})
+                 }
+                 setProfile(null)
+                 setActiveOrgId(null)
+                 return;
+            }
+            
+            sessionStorage.removeItem("transify_admin_session")
+            sessionStorage.removeItem("transify_mock_profile")
+        }
+        
         setUser(null)
         setProfile(null)
         setActiveOrgId(null)
         setAdminSession(null)
-        if (typeof window !== "undefined") {
-            sessionStorage.removeItem("transify_admin_session")
-            sessionStorage.removeItem("transify_mock_profile")
-        }
         auth.signOut().catch(() => { })
     }
 
@@ -182,9 +203,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
-            // If we have a mock profile in sessionStorage, don't let null Firebase user overwrite it
             const storedMock = typeof window !== "undefined" ? sessionStorage.getItem("transify_mock_profile") : null
-            if (!firebaseUser && storedMock) {
+            const storedAdmin = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
+
+            if (!firebaseUser) {
+                // If this specific tab has a valid stored session (mock or admin), 
+                // do NOT clear the React state just because Firebase Auth logged out globally in another tab.
+                if (storedMock || storedAdmin) {
+                    setLoading(false)
+                    return
+                }
+                
+                // Otherwise clear state
+                setUser(null)
+                setProfile(null)
+                setActiveOrgId(null)
+                setAdminSession(null)
                 setLoading(false)
                 return
             }
@@ -267,9 +301,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     console.error("Error fetching profile:", error)
                 }
             } else {
-                setProfile(null)
-                setActiveOrgId(null)
-                setAdminSession(null)
+                // Ignore clearing state if we already handled above
             }
 
             setLoading(false)
