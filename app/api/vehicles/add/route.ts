@@ -6,7 +6,7 @@ import { createAuditLog } from "@/lib/audit-logger";
 export async function POST(req: NextRequest) {
     try {
         const { 
-            plateNumber, type, capacity, driverName, driverId, fuelType, organization_id, admin_email, admin_id,
+            plateNumber, type, capacity, driverName, driverId, driver_phone, driver_photo, fuelType, organization_id, admin_email, admin_id,
             brand_model, year, backup_driver_id, backup_driver_name,
             rc_expiry, insurance_expiry, puc_expiry, fitness_expiry, permit_expiry,
             last_service_date, next_service_due_date, odometer,
@@ -23,6 +23,8 @@ export async function POST(req: NextRequest) {
             capacity: capacity || "0",
             driver_name: driverName || "Unassigned",
             driver_id: driverId || "",
+            driver_phone: driver_phone || "",
+            driver_photo: driver_photo || "",
             fuel_type: fuelType || "",
             organization_id,
             status: "off-duty",

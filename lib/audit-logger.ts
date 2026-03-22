@@ -21,20 +21,25 @@ export const FIELD_LABELS: Record<string, string> = {
     parentPhone: "Parent Phone",
     parent_phone: "Parent Phone",
     route: "Assign Route",
-    vehicle_id: "Assign Vehicle",
+    vehicle_id: "Assigned Vehicle",
     boarding_point: "Boarding Point",
     dropoff_point: "Drop-off Point",
     memberId: "Member ID",
     organization: "Organization",
+    address: "Address",
+    photo_url: "Photo",
+    join_date: "Join Date",
+    leave_date: "Leave Date",
     // Driver fields
     phone: "Phone",
     license_number: "License Number",
     license_type: "License Type",
     // Vehicle fields
     plate_number: "Plate Number",
-    type: "Type",
+    type: "Vehicle Type",
     capacity: "Capacity",
-    driver_name: "Driver",
+    driver_name: "Driver Name",
+    driver_photo: "Driver Photo",
     fuel_type: "Fuel Type",
     brand_model: "Brand / Model",
     year: "Year",
@@ -63,7 +68,7 @@ export const FIELD_LABELS: Record<string, string> = {
 const SKIP_FIELDS = new Set([
     "updated_at", "created_at", "route_id", "driver_id", "backup_driver_id",
     "start_lat", "start_lng", "end_lat", "end_lng", "organization_id",
-    "status", "route_name_normalized",
+    "status", "route_name_normalized", "id", "_id", "uid"
 ]);
 
 /** Convert a field key to a readable label for audit logs */

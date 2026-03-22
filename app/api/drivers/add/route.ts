@@ -46,7 +46,8 @@ export async function POST(req: NextRequest) {
                 const vehicleDocRef = vehicleQuery.docs[0].ref;
                 await vehicleDocRef.update({
                     driver_id: docRef.id,
-                    driver_name: driverDoc.name
+                    driver_name: driverDoc.name,
+                    driver_photo: driverDoc.photo_url
                 });
             }
         }

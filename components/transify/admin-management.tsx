@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import {
     UserPlus, Shield, ShieldCheck, Trash2, Loader2,
     Mail, Clock, CheckCircle2, AlertCircle, Search,
@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils"
 import type { AdminRole, AdminStatus } from "@/lib/rbac"
 import { hasPermission, canManageAdmins } from "@/lib/rbac"
 import type { AdminSession } from "@/hooks/use-auth"
+import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 
 interface AdminUserData {
     user_id: string
@@ -41,9 +43,23 @@ interface AdminManagementProps {
 }
 
 export function AdminManagement({ adminSession }: AdminManagementProps) {
-    const [admins, setAdmins] = useState<AdminUserData[]>([])
+    const [admins, setAdmins] = useState<AdminUserData[]>(() => {
+        if (typeof window !== "undefined") {
+            try {
+                const cached = localStorage.getItem(`transify_admin_cache_admins_${adminSession.organization_id}`)
+                if (cached) return JSON.parse(cached)
+            } catch (e) {}
+        }
+        return []
+    })
     const [auditLogs, setAuditLogs] = useState<AuditLogData[]>([])
-    const [loading, setLoading] = useState(true)
+    const [logIndexError, setLogIndexError] = useState<string | null>(null)
+    const [logStartDate, setLogStartDate] = useState("")
+    const [logEndDate, setLogEndDate] = useState("")
+    const [currentLogPage, setCurrentLogPage] = useState(1)
+    const logsPerPage = 10
+
+    const [loading, setLoading] = useState(false) // Start as false to use cache instantly
     const [error, setError] = useState<string | null>(null)
     const [successMsg, setSuccessMsg] = useState<string | null>(null)
 
@@ -71,10 +87,6 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     const [pendingAction, setPendingAction] = useState<{ type: 'remove' | 'role', userId: string, newRole?: AdminRole } | null>(null)
 
     // Log Filtering & Pagination
-    const [logStartDate, setLogStartDate] = useState("")
-    const [logEndDate, setLogEndDate] = useState("")
-    const [currentLogPage, setCurrentLogPage] = useState(1)
-    const logsPerPage = 10
 
     const isSuperAdmin = adminSession.role === "SUPER_ADMIN"
     const activeAdmins = admins.filter(a => a.status === "ACTIVE")
@@ -82,43 +94,80 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
     const superAdminCount = activeAdmins.filter(a => a.role === "SUPER_ADMIN").length
 
     // ── Fetch Data ──────────────────────────────────────────────────────
-    const fetchAdmins = useCallback(async () => {
-        try {
-            const res = await fetch(`/api/admin/list?organization_id=${adminSession.organization_id}`)
-            if (res.ok) {
-                const data = await res.json()
-                setAdmins(data.admins || [])
+    // ── Real-time Listeners ─────────────────────────────────────────────
+    useEffect(() => {
+        const orgId = adminSession.organization_id
+        if (!orgId) return
+
+        setLoading(true)
+
+        // 1. Admins listener
+        const adminsQuery = query(
+            collection(db, "admin_users"),
+            where("organization_id", "==", orgId)
+        )
+        const unsubAdmins = onSnapshot(adminsQuery, (snapshot) => {
+            const adminList = snapshot.docs.map(doc => ({ ...doc.data(), user_id: doc.id } as AdminUserData))
+            setAdmins(adminList)
+            setLoading(false)
+            if (typeof window !== "undefined") {
+                localStorage.setItem(`transify_admin_cache_admins_${orgId}`, JSON.stringify(adminList))
             }
-        } catch (err) {
-            console.error("Failed to fetch admins:", err)
+        }, (err) => {
+            console.error("Admins listener error:", err)
+            setLoading(false)
+        })
+
+        // 2. Audit logs listener
+        const logsQuery = query(
+            collection(db, "audit_logs"),
+            where("organization_id", "==", orgId),
+            orderBy("timestamp", "desc"),
+            limit(100)
+        )
+        const unsubLogs = onSnapshot(logsQuery, (snapshot) => {
+            const logList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AuditLogData))
+            setAuditLogs(logList)
+            setLogIndexError(null)
+            if (typeof window !== "undefined") {
+                localStorage.setItem(`transify_admin_cache_audit_${orgId}`, JSON.stringify(logList))
+            }
+        }, (err: any) => {
+            console.error("Audit logs listener error:", err)
+            if (err.message?.includes("index")) {
+                setLogIndexError(err.message)
+            }
+        })
+
+        return () => {
+            unsubAdmins()
+            unsubLogs()
         }
     }, [adminSession.organization_id])
 
-    const fetchAuditLogs = useCallback(async () => {
-        try {
-            const orgId = adminSession.organization_id
-            let url = `/api/admin/audit-logs?organization_id=${orgId}&limit=100`
-            if (logStartDate) url += `&start_date=${logStartDate}`
-            if (logEndDate) url += `&end_date=${logEndDate}`
+    // ── Filtered & Sorted Logs ──────────────────────────────────────────
+    const filteredLogs = useMemo(() => {
+        let list = [...auditLogs];
+        
+        // Ensure strictly sorted by timestamp (desc)
+        list.sort((a: AuditLogData, b: AuditLogData) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-            const res = await fetch(url)
-            if (res.ok) {
-                const data = await res.json()
-                setAuditLogs(data.logs || [])
-            }
-        } catch (err) {
-            console.error("Failed to fetch audit logs:", err)
+        if (logStartDate || logEndDate) {
+            const start = logStartDate ? new Date(logStartDate).setHours(0, 0, 0, 0) : 0;
+            const end = logEndDate ? new Date(logEndDate).setHours(23, 59, 59, 999) : Infinity;
+            
+            list = list.filter((l: AuditLogData) => {
+                const t = new Date(l.timestamp).getTime();
+                return t >= start && t <= end;
+            });
         }
-    }, [adminSession.organization_id, logStartDate, logEndDate])
+        
+        return list;
+    }, [auditLogs, logStartDate, logEndDate])
 
     useEffect(() => {
-        const loadData = async () => {
-            setLoading(true)
-            await Promise.all([fetchAdmins(), fetchAuditLogs()])
-            setLoading(false)
-        }
-        loadData()
-    }, [fetchAdmins, fetchAuditLogs])
+        setCurrentLogPage(1)
+    }, [logStartDate, logEndDate])
 
     // ── Toast helper ────────────────────────────────────────────────────
     const showSuccess = (msg: string) => {
@@ -155,7 +204,6 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
             showSuccess(`Invite sent to ${inviteEmail}`)
             setInviteEmail("")
             setShowInviteForm(false)
-            await Promise.all([fetchAdmins(), fetchAuditLogs()])
         } catch (err: any) {
             setError(err.message)
         } finally {
@@ -191,7 +239,6 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
             showSuccess(data.message)
             setConfirmRemove(null)
-            await Promise.all([fetchAdmins(), fetchAuditLogs()])
         } catch (err: any) {
             setError(err.message)
         } finally {
@@ -227,7 +274,6 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
             if (!res.ok) throw new Error(data.error)
 
             showSuccess(`Role changed to ${newRole}`)
-            await Promise.all([fetchAdmins(), fetchAuditLogs()])
         } catch (err: any) {
             setError(err.message)
         } finally {
@@ -286,7 +332,6 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
             setShowTransferModal(false)
             setPendingAction(null)
-            await Promise.all([fetchAdmins(), fetchAuditLogs()])
         } catch (err: any) {
             setError(err.message)
         } finally {
@@ -349,14 +394,7 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => { fetchAdmins(); fetchAuditLogs() }}
-                        className="gap-2 rounded-xl"
-                    >
-                        <RefreshCw className="h-3.5 w-3.5" /> Refresh
-                    </Button>
+
                     {isSuperAdmin && (
                         <Button
                             onClick={() => setShowInviteForm(true)}
@@ -701,10 +739,24 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                         <h2 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Audit Log</h2>
                     </div>
                     <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden min-h-[400px]">
-                    {auditLogs.length === 0 ? (
+                    {logIndexError ? (
+                        <div className="flex flex-col items-center gap-3 py-12 px-8 text-center bg-destructive/5">
+                            <AlertCircle className="h-8 w-8 text-destructive opacity-80" />
+                            <p className="text-sm font-bold text-destructive">Firestore Index Required</p>
+                            <p className="text-xs text-muted-foreground max-w-xs">
+                                Sorting and filtering requires a composite index. Please click the link below to create it in Firebase Console:
+                                <br />
+                                <a href={logIndexError.match(/https:\/\/console\.firebase\.google\.com[^\s]*/)?.[0] || "#"} 
+                                   target="_blank" rel="noreferrer" className="mt-2 inline-block text-primary underline truncate w-full">
+                                    Create Index
+                                </a>
+                            </p>
+                            <Button variant="outline" size="sm" className="mt-2" onClick={() => window.location.reload()}>Retry After Creating</Button>
+                        </div>
+                    ) : filteredLogs.length === 0 ? (
                         <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
                             <Shield className="h-8 w-8 opacity-40" />
-                            <p className="text-sm">No audit logs yet</p>
+                            <p className="text-sm">{auditLogs.length > 0 ? "No results for selected dates" : "No audit logs yet"}</p>
                         </div>
                     ) : (
                         <div className="flex flex-col gap-4">
@@ -735,9 +787,9 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                                 {(() => {
                                     const indexOfLastLog = currentLogPage * logsPerPage;
                                     const indexOfFirstLog = indexOfLastLog - logsPerPage;
-                                    const currentLogs = auditLogs.slice(indexOfFirstLog, indexOfLastLog);
+                                    const currentLogs = filteredLogs.slice(indexOfFirstLog, indexOfLastLog);
                                     
-                                    return currentLogs.map(log => (
+                                    return currentLogs.map((log: AuditLogData) => (
                                         <div key={log.id} className="flex items-start gap-3 py-3.5 border-b last:border-0 border-border/50">
                                             <div className={cn(
                                                 "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted",
@@ -767,10 +819,10 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                             </div>
 
                             {/* Pagination Controls */}
-                            {auditLogs.length > logsPerPage && (
+                            {filteredLogs.length > logsPerPage && (
                                 <div className="flex items-center justify-between px-5 py-4 bg-muted/20 border-t border-border mt-auto">
                                     <p className="text-xs text-muted-foreground">
-                                        Showing {Math.min(auditLogs.length, (currentLogPage - 1) * logsPerPage + 1)} to {Math.min(auditLogs.length, currentLogPage * logsPerPage)} of {auditLogs.length} logs
+                                        Showing {Math.min(filteredLogs.length, (currentLogPage - 1) * logsPerPage + 1)} to {Math.min(filteredLogs.length, currentLogPage * logsPerPage)} of {filteredLogs.length} logs
                                     </p>
                                     <div className="flex items-center gap-2">
                                         <Button
@@ -783,10 +835,10 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                                             Previous
                                         </Button>
                                         <div className="flex items-center gap-1">
-                                            {Array.from({ length: Math.ceil(auditLogs.length / logsPerPage) }).map((_, i) => {
+                                            {Array.from({ length: Math.ceil(filteredLogs.length / logsPerPage) }).map((_, i) => {
                                                 const page = i + 1;
                                                 // Only show current, first, last, and pages around current
-                                                if (page === 1 || page === Math.ceil(auditLogs.length / logsPerPage) || (page >= currentLogPage - 1 && page <= currentLogPage + 1)) {
+                                                if (page === 1 || page === Math.ceil(filteredLogs.length / logsPerPage) || (page >= currentLogPage - 1 && page <= currentLogPage + 1)) {
                                                     return (
                                                         <button
                                                             key={page}
@@ -811,8 +863,8 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
                                         <Button
                                             variant="outline"
                                             size="sm"
-                                            onClick={() => setCurrentLogPage(prev => Math.min(Math.ceil(auditLogs.length / logsPerPage), prev + 1))}
-                                            disabled={currentLogPage === Math.ceil(auditLogs.length / logsPerPage)}
+                                            onClick={() => setCurrentLogPage(prev => Math.min(Math.ceil(filteredLogs.length / logsPerPage), prev + 1))}
+                                            disabled={currentLogPage === Math.ceil(filteredLogs.length / logsPerPage)}
                                             className="h-8 rounded-lg px-3 text-xs"
                                         >
                                             Next

@@ -25,27 +25,31 @@ export default function ParentDashboardPage() {
 
     return (
         <>
-            {activeTab === "home" && (
+            <div className={activeTab === "home" ? "block" : "hidden"}>
                 <ParentHomeScreen
                     isPremium={isPremium}
                     onUpgrade={() => setShowPremium(true)}
                 />
-            )}
-            {activeTab === "trips" && <ParentTripsScreen />}
-            {activeTab === "alerts" && <ParentAlertsScreen />}
-            {activeTab === "reports" && (
+            </div>
+            <div className={activeTab === "trips" ? "block" : "hidden"}>
+                <ParentTripsScreen />
+            </div>
+            <div className={activeTab === "alerts" ? "block" : "hidden"}>
+                <ParentAlertsScreen />
+            </div>
+            <div className={activeTab === "reports" ? "block" : "hidden"}>
                 <ParentReportsScreen
                     isPremium={isPremium}
                     onUpgrade={() => setShowPremium(true)}
                 />
-            )}
-            {activeTab === "profile" && (
+            </div>
+            <div className={activeTab === "profile" ? "block" : "hidden"}>
                 <ParentProfileScreen
                     isPremium={isPremium}
                     onUpgrade={() => setShowPremium(true)}
                     onLogout={handleLogout}
                 />
-            )}
+            </div>
 
             <BottomNav
                 activeTab={activeTab}

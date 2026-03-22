@@ -165,7 +165,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (roleToLogout === "admin") {
                 sessionStorage.removeItem("transify_admin_session")
                 setAdminSession(null)
-                // If there's no driver/parent mock profile active globally, we can safely sign out of Firebase
+                // If this was an admin-only session, we can sign out of Firebase
+                // But generally, to support multi-tab, we only sign out if NO other role is active in THIS tab
                 if (!sessionStorage.getItem("transify_mock_profile")) {
                     auth.signOut().catch(() => {})
                 }
@@ -173,12 +174,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
             if (roleToLogout === "driver" || roleToLogout === "guardian") {
                  sessionStorage.removeItem("transify_mock_profile")
-                 // If there's no admin session in this browser, sign out of firebase
+                 setProfile(null)
+                 setActiveOrgId(null)
+                 // Only sign out if NO admin session is active in THIS tab
                  if (!sessionStorage.getItem("transify_admin_session")) {
                      auth.signOut().catch(() => {})
                  }
-                 setProfile(null)
-                 setActiveOrgId(null)
                  return;
             }
             

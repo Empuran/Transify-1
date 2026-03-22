@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     try {
         const {
             vehicle_id, organization_id, admin_email, admin_id,
-            plateNumber, type, capacity, driverName, driverId, fuelType,
+            plateNumber, type, capacity, driverName, driverId, driver_phone, driver_photo, fuelType,
             brand_model, year, backup_driver_id, backup_driver_name,
             rc_expiry, insurance_expiry, puc_expiry, fitness_expiry, permit_expiry,
             last_service_date, next_service_due_date, odometer,
@@ -27,6 +27,8 @@ export async function POST(req: NextRequest) {
         if (capacity !== undefined) updateData.capacity = capacity;
         if (driverName !== undefined) updateData.driver_name = driverName;
         if (driverId !== undefined) updateData.driver_id = driverId;
+        if (driver_phone !== undefined) updateData.driver_phone = driver_phone;
+        if (driver_photo !== undefined) updateData.driver_photo = driver_photo;
         if (fuelType !== undefined) updateData.fuel_type = fuelType;
 
         if (brand_model !== undefined) updateData.brand_model = brand_model;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 
 export async function POST(req: NextRequest) {
     try {
@@ -96,13 +97,15 @@ export async function POST(req: NextRequest) {
         });
 
         // 7. Log audit entry
-        await adminDb.collection("audit_logs").add({
-            action_type: "ADMIN_LOGIN",
-            performed_by_user_id: adminUser.id,
-            performed_by_email: email.toLowerCase(),
+        await createAuditLog({
+            action: "login",
+            entity_type: "system",
+            entity_id: adminUser.id,
+            admin_id: adminUser.id,
+            admin_name: adminData.name,
+            admin_email: email.toLowerCase(),
             organization_id,
-            details: `Admin ${adminData.name} logged in with role ${adminData.role}`,
-            timestamp: new Date().toISOString(),
+            details: `${adminData.name} (${email.toLowerCase()}) logged in as ${adminData.role}.`,
         });
 
         // 8. Get organization details

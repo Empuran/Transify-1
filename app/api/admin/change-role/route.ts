@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 
 export async function POST(req: NextRequest) {
     try {
@@ -53,16 +54,15 @@ export async function POST(req: NextRequest) {
         await targetSnap.ref.update({ role: new_role });
 
         // 5. Log audit
-        await adminDb.collection("audit_logs").add({
-            action: "ADMIN_ROLE_CHANGED",
+        await createAuditLog({
+            action: "update",
+            entity_type: "system",
+            entity_id: user_id,
             admin_id: changed_by_user_id,
-            admin_email: changerSnap.data()!.email,
             admin_name: changerSnap.data()!.name || changerSnap.data()!.email,
+            admin_email: changerSnap.data()!.email,
             organization_id,
-            target_user_id: user_id,
-            entity_type: "Admin Role",
             details: `Changed role of ${targetData.email} from ${oldRole} to ${new_role}`,
-            timestamp: new Date().toISOString(),
         });
 
         return NextResponse.json({

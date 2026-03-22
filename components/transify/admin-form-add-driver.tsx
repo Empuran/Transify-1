@@ -45,6 +45,7 @@ export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormPro
     const [saved, setSaved] = useState(false)
     const [loading, setLoading] = useState(false)
     const [vehicleOptions, setVehicleOptions] = useState<string[]>(["Unassigned"])
+    const isInactive = initialData?.lifecycle_status === "INACTIVE"
 
     // Fetch real vehicles from Firestore
     useEffect(() => {
@@ -175,15 +176,26 @@ export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormPro
                         </div>
                     </div>
 
-                    {/* Vehicle Assignment */}
                     <div className="flex flex-col gap-1.5">
-                        <label className="text-sm font-semibold text-foreground">Assign Vehicle</label>
-                        <button onClick={() => setShowVehicle(!showVehicle)} className="flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5">
+                        <label className="text-sm font-semibold text-foreground flex items-center justify-between">
+                            <span>Assign Vehicle</span>
+                            {isInactive && <span className="text-[10px] text-destructive font-bold uppercase tracking-tighter">Inactive Driver</span>}
+                        </label>
+                        <button 
+                            onClick={() => !isInactive && setShowVehicle(!showVehicle)} 
+                            disabled={isInactive}
+                            className={cn(
+                                "flex h-12 items-center justify-between rounded-xl border border-border bg-background px-3.5 transition-colors",
+                                isInactive ? "opacity-60 grayscale-[0.5] cursor-not-allowed bg-muted/30" : "hover:border-primary/30"
+                            )}
+                        >
                             <div className="flex items-center gap-2">
                                 <Bus className="h-4 w-4 text-muted-foreground" />
-                                <span className={cn("text-sm", data.vehicleId ? "text-foreground" : "text-muted-foreground")}>{data.vehicleId || "Select vehicle (optional)"}</span>
+                                <span className={cn("text-sm", data.vehicleId ? "text-foreground" : "text-muted-foreground")}>
+                                    {isInactive ? "Restore driver status to assign" : (data.vehicleId || "Select vehicle (optional)")}
+                                </span>
                             </div>
-                            <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showVehicle && "rotate-180")} />
+                            {!isInactive && <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showVehicle && "rotate-180")} />}
                         </button>
                         {showVehicle && (
                             <div className="mt-1 flex flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-md">
@@ -210,7 +222,10 @@ export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormPro
                     {/* Photo URL & Join Date */}
                     <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-semibold text-foreground">Photo</label>
+                            <label className="text-sm font-semibold text-foreground flex items-center justify-between">
+                                <span>Photo</span>
+                                {data.photo_url && !photoFile && <span className="text-[10px] text-success font-bold">Uploaded</span>}
+                            </label>
                             <div className="flex gap-2">
                                 {(photoFile || data.photo_url) && (
                                     <div className="h-12 w-12 shrink-0 rounded-xl overflow-hidden border border-border bg-muted">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 
 export async function POST(req: NextRequest) {
     try {
@@ -61,14 +62,15 @@ export async function POST(req: NextRequest) {
         });
 
         // 6. Log audit entry
-        await adminDb.collection("audit_logs").add({
-            action_type: "ADMIN_REMOVED",
-            performed_by_user_id: removed_by_user_id,
-            performed_by_email: removerSnap.data()!.email,
+        await createAuditLog({
+            action: "delete",
+            entity_type: "system",
+            entity_id: user_id,
+            admin_id: removed_by_user_id,
+            admin_name: removerSnap.data()!.name || removerSnap.data()!.email,
+            admin_email: removerSnap.data()!.email,
             organization_id,
-            target_user_id: user_id,
             details: `Removed admin ${targetData.email} (${targetData.name})`,
-            timestamp: new Date().toISOString(),
         });
 
         return NextResponse.json({

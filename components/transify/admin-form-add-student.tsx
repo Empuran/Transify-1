@@ -404,7 +404,10 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                     {/* Photo URL & Join Date */}
                     <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-semibold text-foreground">Photo</label>
+                            <label className="text-sm font-semibold text-foreground flex items-center justify-between">
+                                <span>Photo</span>
+                                {data.photo_url && !photoFile && <span className="text-[10px] text-success font-bold">Uploaded</span>}
+                            </label>
                             <div className="flex gap-2">
                                 {(photoFile || data.photo_url) && (
                                     <div className="h-12 w-12 shrink-0 rounded-xl overflow-hidden border border-border bg-muted">

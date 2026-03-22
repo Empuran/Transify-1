@@ -32,10 +32,14 @@ export async function GET(req: NextRequest) {
             }
         }
 
-        const drivers = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-        }));
+        const includeInactive = req.nextUrl.searchParams.get("include_inactive") === "true";
+
+        const drivers = snapshot.docs
+            .map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+            }))
+            .filter((d: any) => includeInactive || d.lifecycle_status !== "INACTIVE");
 
         // Sort by created_at descending
         drivers.sort((a: any, b: any) => {

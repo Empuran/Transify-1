@@ -91,19 +91,17 @@ export async function POST(req: NextRequest) {
 
 
         // ── Audit Log ────────────────────────────────────────────────────────
-        if (admin_id && admin_email) {
-            const changedLabels = getChangedFieldLabels(updateData, oldData);
+        const changedLabels = getChangedFieldLabels(updateData, oldData);
 
-            await createAuditLog({
-                action: "update",
-                entity_type: "route",
-                entity_id: route_id,
-                admin_id,
-                admin_email,
-                organization_id,
-                details: `Updated route ${routeName || oldData?.route_name}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`
-            });
-        }
+        await createAuditLog({
+            action: "update",
+            entity_type: "route",
+            entity_id: route_id,
+            admin_id: admin_id || admin_email || "unknown",
+            admin_email: admin_email || "",
+            organization_id,
+            details: `Updated route ${routeName || oldData?.route_name}${changedLabels.length > 0 ? ': ' + changedLabels.join(', ') : ''}`
+        });
 
         return NextResponse.json({ success: true, message: "Route updated" });
     } catch (error: any) {

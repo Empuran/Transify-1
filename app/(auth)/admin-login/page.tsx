@@ -73,21 +73,6 @@ function AdminLoginContent() {
     const handleLoginSuccess = async (customToken: string, adminData: AdminSession) => {
         try {
             await loginAdmin(customToken, adminData)
-            // Log admin login event for super admin audit trail
-            fetch("/api/logs/add", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action: "login",
-                    entity_type: "system",
-                    entity_id: adminData.user_id || adminData.email,
-                    admin_id: adminData.user_id || adminData.email,
-                    admin_name: adminData.name,
-                    admin_email: adminData.email,
-                    organization_id: adminData.organization_id,
-                    details: `${adminData.name} (${adminData.email}) logged in as ${adminData.role}.`,
-                }),
-            }).catch(() => { })
             router.push("/admin")
         } catch (error) {
             console.error("Login failed:", error)

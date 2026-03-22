@@ -18,6 +18,8 @@ export interface VehicleData {
     capacity: string
     driverName: string
     driverId: string
+    driver_phone?: string
+    driver_photo?: string
     fuelType: string
     // Lifecycle & Details
     brand_model: string
@@ -54,6 +56,8 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
         capacity: initialData?.capacity || "",
         driverName: initialData?.driver_name || initialData?.driverName || "",
         driverId: initialData?.driver_id || "",
+        driver_phone: initialData?.driver_phone || "",
+        driver_photo: initialData?.driver_photo || "",
         fuelType: initialData?.fuel_type || initialData?.fuelType || "",
         brand_model: initialData?.brand_model || "",
         year: initialData?.year || "",
@@ -83,7 +87,7 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
     const [showRoute, setShowRoute] = useState(false)
     const [saved, setSaved] = useState(false)
     
-    const [driverOptions, setDriverOptions] = useState<{ name: string, id: string }[]>([{ name: "Unassigned", id: "" }])
+    const [driverOptions, setDriverOptions] = useState<{ name: string, id: string, photo_url?: string, phone?: string }[]>([{ name: "Unassigned", id: "" }])
     const [routeOptions, setRouteOptions] = useState<{ name: string, id: string }[]>([{ name: "Unassigned", id: "" }])
 
     useEffect(() => {
@@ -97,7 +101,7 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
             .then(r => r.json())
             .then(d => {
                 if (d.drivers) {
-                    const options = d.drivers.map((dr: any) => ({ name: dr.name, id: dr.id }))
+                    const options = d.drivers.map((dr: any) => ({ name: dr.name, id: dr.id, photo_url: dr.photo_url, phone: dr.phone || dr.phone_number || "" }))
                     setDriverOptions([...options, { name: "Unassigned", id: "" }])
                 }
             }).catch(() => { })
@@ -269,8 +273,15 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
                                 <label className="text-xs font-semibold text-foreground">Primary Driver</label>
                                 <SelectButton value={data.driverName} placeholder="Assign primary driver" onClick={() => setShowDriver(!showDriver)} isOpen={showDriver}>
                                     {driverOptions.map(d => (
-                                        <button key={d.id} onClick={() => { setData({ ...data, driverName: d.name, driverId: d.id }); setShowDriver(false) }}
-                                            className={cn("px-3 py-2 text-xs text-left hover:bg-muted rounded-lg", data.driverId === d.id && "bg-primary/10 text-primary")}>{d.name}</button>
+                                        <button key={d.id} onClick={() => { setData({ ...data, driverName: d.name, driverId: d.id, driver_photo: d.photo_url, driver_phone: d.phone }); setShowDriver(false) }}
+                                            className={cn("px-3 py-2 text-xs text-left hover:bg-muted rounded-lg flex items-center gap-2", data.driverId === d.id && "bg-primary/10 text-primary")}>
+                                            {d.photo_url && (
+                                                <div className="h-6 w-6 rounded-full overflow-hidden shrink-0 border border-border">
+                                                    <img src={d.photo_url} alt={d.name} className="h-full w-full object-cover" />
+                                                </div>
+                                            )}
+                                            {d.name}
+                                        </button>
                                     ))}
                                 </SelectButton>
                             </div>

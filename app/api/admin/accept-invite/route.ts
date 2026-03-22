@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 
 // POST /api/admin/accept-invite — validates token and activates the admin
 export async function POST(req: NextRequest) {
@@ -73,13 +74,15 @@ export async function POST(req: NextRequest) {
         });
 
         // Log audit entry
-        await adminDb.collection("audit_logs").add({
-            action_type: "ADMIN_INVITE_ACCEPTED",
-            performed_by_user_id: doc.id,
-            performed_by_email: email.toLowerCase(),
+        await createAuditLog({
+            action: "login",
+            entity_type: "system",
+            entity_id: doc.id,
+            admin_id: doc.id,
+            admin_name: data.name || email.toLowerCase(),
+            admin_email: email.toLowerCase(),
             organization_id: data.organization_id,
-            details: `${email} accepted invite as ${data.role}`,
-            timestamp: new Date().toISOString(),
+            details: `${email.toLowerCase()} accepted invite as ${data.role}.`,
         });
 
         // Fetch org details so the frontend can redirect to the correct login page

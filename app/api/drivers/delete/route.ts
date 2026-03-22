@@ -28,6 +28,9 @@ export async function POST(req: NextRequest) {
             leave_date: leaveDate,
             removal_reason: removal_reason.trim(),
             updated_at: new Date().toISOString(),
+            // Clear assignment info from the driver doc as well
+            assigned_vehicle_id: "",
+            assigned_vehicle_plate: "",
         });
 
         // Write lifecycle history entry
@@ -39,6 +42,64 @@ export async function POST(req: NextRequest) {
             snapshot_data: existing,
             timestamp: new Date().toISOString(),
         });
+
+        // ── Transition Vehicle Assignments ──────────────────────────────────
+        // Use the organization ID from the driver record if missing in body
+        const orgId = organization_id || existing?.organization_id;
+        
+        // Find vehicles where this driver was primary or backup
+        // Removing org check here to be more robust - if the driver_id matches, we should clear it
+        console.log(`[Driver Delete] Finding vehicles for driver ${driver_id} in org ${orgId}`);
+        const primaryVehicles = await adminDb.collection("vehicles")
+            .where("driver_id", "==", driver_id)
+            .get();
+
+        const backupVehicles = await adminDb.collection("vehicles")
+            .where("backup_driver_id", "==", driver_id)
+            .get();
+
+        console.log(`[Driver Delete] Found ${primaryVehicles.size} primary and ${backupVehicles.size} backup assignments`);
+
+        const batch = adminDb.batch();
+
+        primaryVehicles.forEach(doc => {
+            const data = doc.data();
+            console.log(`[Driver Delete] Transitioning primary assignment for vehicle ${doc.id} (${data.plate_number})`);
+            if (data.backup_driver_id) {
+                // Promote backup to primary
+                batch.update(doc.ref, {
+                    driver_id: data.backup_driver_id,
+                    driver_name: data.backup_driver_name,
+                    driver_photo: data.backup_driver_photo || "",
+                    driver_phone: data.backup_driver_phone || "",
+                    backup_driver_id: "",
+                    backup_driver_name: "",
+                    updated_at: new Date().toISOString()
+                });
+            } else {
+                // Just clear primary
+                batch.update(doc.ref, {
+                    driver_id: "",
+                    driver_name: "Unassigned",
+                    driver_photo: "",
+                    driver_phone: "",
+                    updated_at: new Date().toISOString()
+                });
+            }
+        });
+
+        backupVehicles.forEach(doc => {
+            const data = doc.data();
+            console.log(`[Driver Delete] Transitioning backup assignment for vehicle ${doc.id} (${data.plate_number})`);
+            batch.update(doc.ref, {
+                backup_driver_id: "",
+                backup_driver_name: "",
+                updated_at: new Date().toISOString()
+            });
+        });
+
+        await batch.commit();
+        console.log(`[Driver Delete] Batch commit successful for driver ${driver_id}`);
 
         if (admin_email && organization_id) {
             await createAuditLog({

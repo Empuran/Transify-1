@@ -17,6 +17,7 @@ import {
   Send,
   Loader2,
   User,
+  Hash,
 } from "lucide-react"
 import { StatusBadge } from "./status-badge"
 import { useAuth } from "@/hooks/use-auth"
@@ -41,6 +42,8 @@ interface ChildData {
   boarding_point?: { name: string; lat: number; lng: number } | null
   dropoff_point?: { name: string; lat: number; lng: number } | null
   photo_url?: string | null
+  driverPhotoUrl?: string | null
+  driverPhone?: string | null
 }
 
 // Resolves raw Firestore IDs to human-readable vehicle plates, drivers, and route names
@@ -58,6 +61,7 @@ const resolveStudentData = async (rawStudents: Array<{
       let driverId = ""
       let routeName = s.rawRoute
       let routeDocId: string | undefined = s.routeId
+      let vMatch: any = null
 
       if (s.orgId) {
           try {
@@ -68,7 +72,7 @@ const resolveStudentData = async (rawStudents: Array<{
               ])
 
               if (vRes?.vehicles) {
-                  const vMatch = vRes.vehicles.find((v: any) => v.id === s.vehicleId || v.plate_number === s.vehicleId)
+                  vMatch = vRes.vehicles.find((v: any) => v.id === s.vehicleId || v.plate_number === s.vehicleId)
                   if (vMatch) {
                       vehiclePlate = vMatch.plate_number || vMatch.registration_number || s.vehicleId
                       driverName = vMatch.driver_name || vMatch.assigned_driver || "Not Assigned"
@@ -103,6 +107,8 @@ const resolveStudentData = async (rawStudents: Array<{
         boarding_point: s.boarding_point,
         dropoff_point: s.dropoff_point,
         photo_url: s.photo_url,
+        driverPhotoUrl: vMatch?.driver_photo || null,
+        driverPhone: vMatch?.driver_phone || null,
       } as ChildData & { orgId: string }
     })
   )
@@ -117,14 +123,36 @@ interface ParentHomeScreenProps {
 
 export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScreenProps) {
   const { profile } = useAuth()
-  const [students, setStudents] = useState<ChildData[]>([])
-  const [selectedChild, setSelectedChild] = useState<ChildData | null>(null)
+  const [students, setStudents] = useState<ChildData[]>(() => {
+    if (typeof window !== "undefined" && profile?.phone) {
+      try {
+        const cached = localStorage.getItem(`transify_cached_students_${profile.phone}`)
+        if (cached) return JSON.parse(cached)
+      } catch (e) {
+        console.error("Cache read error", e)
+      }
+    }
+    return []
+  })
+  const [selectedChild, setSelectedChild] = useState<ChildData | null>(() => {
+    if (typeof window !== "undefined" && profile?.phone) {
+      try {
+        const cached = localStorage.getItem(`transify_cached_students_${profile.phone}`)
+        if (cached) {
+          const parsed = JSON.parse(cached)
+          return parsed[0] || null
+        }
+      } catch (e) {}
+    }
+    return null
+  })
   const [showChildPicker, setShowChildPicker] = useState(false)
 
   const userName = profile?.globalName || "User"
   const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
 
   const [showRatingModal, setShowRatingModal] = useState(false)
+  const [showDriverInfo, setShowDriverInfo] = useState(false)
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -201,6 +229,11 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
       const enriched = await resolveStudentData(combinedRaw)
       if (cancelled) return
       setStudents(enriched)
+      
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`transify_cached_students_${profile.phone}`, JSON.stringify(enriched))
+      }
+
       setSelectedChild(prev =>
         prev ? (enriched.find(s => s.id === prev.id) || enriched[0] || null) : (enriched[0] || null)
       )
@@ -704,17 +737,29 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
           </div>
           <div className="flex flex-col items-end gap-0.5">
             <span className="text-xs text-muted-foreground">Driver</span>
-            <div className="flex flex-col items-end">
-              <span className="text-sm font-semibold text-foreground">{selectedChild?.driver || "Not Assigned"}</span>
-              {selectedChild && (
-                <button 
-                  onClick={() => setShowRatingModal(true)}
-                  className="mt-1 flex items-center gap-1 text-[10px] font-bold text-primary hover:text-primary/80 transition-colors"
-                >
-                  <Star className="h-3 w-3 fill-primary/20" />
-                  Rate Driver
-                </button>
-              )}
+            <div className="flex items-center gap-2">
+              <div className="flex flex-col items-end">
+                <span className="text-sm font-semibold text-foreground">{selectedChild?.driver || "Not Assigned"}</span>
+                {selectedChild && (
+                  <button 
+                    onClick={() => setShowRatingModal(true)}
+                    className="mt-1 flex items-center gap-1 text-[10px] font-bold text-primary hover:text-primary/80 transition-colors"
+                  >
+                    <Star className="h-3 w-3 fill-primary/20" />
+                    Rate Driver
+                  </button>
+                )}
+              </div>
+              <button 
+                onClick={() => selectedChild?.driver && setShowDriverInfo(true)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 overflow-hidden border border-primary/20 hover:border-primary/50 transition-colors group"
+              >
+                {selectedChild?.driverPhotoUrl ? (
+                  <img src={selectedChild.driverPhotoUrl} alt={selectedChild.driver} className="h-full w-full object-cover group-hover:scale-110 transition-transform" />
+                ) : (
+                  <User className="h-5 w-5 text-primary group-hover:scale-110 transition-transform" />
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -998,6 +1043,68 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
                 >
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   Submit
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Driver Info Modal */}
+      {showDriverInfo && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-foreground/50 p-4 backdrop-blur-sm" onClick={() => setShowDriverInfo(false)}>
+          <div className="w-full max-w-sm rounded-[2rem] bg-card p-6 shadow-2xl animate-in fade-in zoom-in duration-200" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-col items-center text-center">
+              <div className="relative mb-4 h-24 w-24 overflow-hidden rounded-3xl border-4 border-primary/10 shadow-lg">
+                {selectedChild?.driverPhotoUrl ? (
+                  <img src={selectedChild.driverPhotoUrl} alt={selectedChild.driver} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-primary/10">
+                    <User className="h-10 w-10 text-primary" />
+                  </div>
+                )}
+              </div>
+              <h3 className="text-xl font-bold text-foreground">{selectedChild?.driver || "Driver"}</h3>
+              <p className="text-sm text-muted-foreground">Certified Driver · Transport Team</p>
+              
+              <div className="mt-6 w-full space-y-3">
+                <div className="flex items-center justify-between rounded-2xl bg-muted/50 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                      <Hash className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Phone Number</p>
+                      <p className="text-sm font-bold text-foreground">{selectedChild?.driverPhone || "Not Available"}</p>
+                    </div>
+                  </div>
+                  {selectedChild?.driverPhone && (
+                    <a 
+                      href={`tel:${selectedChild.driverPhone}`}
+                      className="flex h-10 w-10 items-center justify-center rounded-xl bg-success text-white shadow-lg active:scale-95 transition-transform"
+                    >
+                      <Send className="h-4 w-4" />
+                    </a>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 rounded-2xl bg-muted/50 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-success/10">
+                    <CheckCircle2 className="h-5 w-5 text-success" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Verification</p>
+                    <p className="text-sm font-bold text-foreground">Verified & Onboarded</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 w-full">
+                <Button
+                  onClick={() => setShowDriverInfo(false)}
+                  className="h-12 w-full rounded-2xl bg-primary text-white font-bold"
+                >
+                  Close
                 </Button>
               </div>
             </div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { createAuditLog } from "@/lib/audit-logger";
 import { sendAdminInviteEmail } from "@/lib/email";
 import { randomUUID } from "crypto";
 
@@ -66,14 +67,15 @@ export async function POST(req: NextRequest) {
         }
 
         // 5. Log audit entry
-        await adminDb.collection("audit_logs").add({
-            action_type: "ADMIN_INVITE_SENT",
-            performed_by_user_id: invited_by_user_id,
-            performed_by_email: inviterSnap.data()!.email,
+        await createAuditLog({
+            action: "add",
+            entity_type: "system",
+            entity_id: email.toLowerCase(),
+            admin_id: invited_by_user_id,
+            admin_name: inviterSnap.data()!.name || inviterSnap.data()!.email,
+            admin_email: inviterSnap.data()!.email,
             organization_id,
-            target_user_id: email.toLowerCase(),
             details: `Invited ${email} as ${role}`,
-            timestamp: new Date().toISOString(),
         });
 
         // 6. Fetch org name for the email

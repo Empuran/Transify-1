@@ -23,7 +23,17 @@ export async function POST(req: NextRequest) {
         if (name !== undefined) updateData.name = name;
         if (phone !== undefined) updateData.phone = phone;
         if (licenseNumber !== undefined) updateData.license_number = licenseNumber;
-        if (vehicleId !== undefined) updateData.vehicle_id = vehicleId;
+        
+        // Block assignment if inactive
+        if (vehicleId !== undefined && vehicleId !== "" && vehicleId !== "Unassigned") {
+            if (oldData?.lifecycle_status === "INACTIVE") {
+                return NextResponse.json({ error: "Cannot assign vehicle to an inactive driver. Please restore the driver first." }, { status: 400 });
+            }
+            updateData.vehicle_id = vehicleId;
+        } else if (vehicleId !== undefined) {
+            updateData.vehicle_id = vehicleId;
+        }
+
         if (licenseType !== undefined) updateData.license_type = licenseType;
         if (address !== undefined) updateData.address = address;
         if (photo_url !== undefined) updateData.photo_url = photo_url;
@@ -76,7 +86,10 @@ export async function POST(req: NextRequest) {
                 .where("driver_id", "==", driver_id)
                 .get();
             vehiclesById.forEach(doc => {
-                batch.update(doc.ref, { driver_name: name || oldData?.name });
+                const vehicleUpdate: any = {};
+                if (name !== undefined || oldData?.name) vehicleUpdate.driver_name = name || oldData?.name;
+                if (photo_url !== undefined) vehicleUpdate.driver_photo = photo_url;
+                batch.update(doc.ref, vehicleUpdate);
             });
 
             // 4. Link to NOVEL vehicle if changed
@@ -89,7 +102,8 @@ export async function POST(req: NextRequest) {
                 if (!newVehicleQuery.empty) {
                     batch.update(newVehicleQuery.docs[0].ref, { 
                         driver_id: driver_id, 
-                        driver_name: name || oldData?.name 
+                        driver_name: name || oldData?.name,
+                        driver_photo: photo_url || oldData?.photo_url
                     });
                 }
             }

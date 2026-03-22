@@ -143,23 +143,95 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   }, [orgCode, profile?.activeOrgId])
   useEffect(() => { resolveOrg() }, [resolveOrg])
 
-  const [tripState, setTripState] = useState<TripState>("not-started")
-  const [tripDirection, setTripDirection] = useState<"to-school" | "from-school">("to-school")
+  const [tripState, setTripState] = useState<TripState>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("transify_driver_trip_state") as TripState) || "not-started"
+    }
+    return "not-started"
+  })
+  const [tripDirection, setTripDirection] = useState<"to-school" | "from-school">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("transify_driver_trip_direction") as any) || "to-school"
+    }
+    return "to-school"
+  })
   const [showDelayReport, setShowDelayReport] = useState(false)
   const [showSosConfirm, setShowSosConfirm] = useState(false)
-  const [vehicles, setVehicles] = useState<any[]>([])
-  const [selectedVehicle, setSelectedVehicle] = useState<any>(null)
+  
+  const [vehicles, setVehicles] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("transify_driver_vehicles")
+      return cached ? JSON.parse(cached) : []
+    }
+    return []
+  })
+  const [selectedVehicle, setSelectedVehicle] = useState<any>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("transify_driver_selected_vehicle")
+      return cached ? JSON.parse(cached) : null
+    }
+    return null
+  })
   const [showVehiclePicker, setShowVehiclePicker] = useState(false)
-  const [realName, setRealName] = useState("")
-  const [driverId, setDriverId] = useState("")
-  const [driverPhone, setDriverPhone] = useState("")
-  const [driverPhoto, setDriverPhoto] = useState("")
-  const [assignedVehicleId, setAssignedVehicleId] = useState<string>("")
+  
+  const [realName, setRealName] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("transify_driver_name") || ""
+    return ""
+  })
+  const [driverId, setDriverId] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("transify_driver_id") || ""
+    return ""
+  })
+  const [driverPhone, setDriverPhone] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("transify_driver_phone") || ""
+    return ""
+  })
+  const [driverPhoto, setDriverPhoto] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("transify_driver_photo") || ""
+    return ""
+  })
+  const [assignedVehicleId, setAssignedVehicleId] = useState<string>(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("transify_driver_assigned_veh_id") || ""
+    return ""
+  })
   const [isVerifying, setIsVerifying] = useState(true)
-  const [currentRoute, setCurrentRoute] = useState<any>(null)
-  const [dynamicStops, setDynamicStops] = useState<any[]>([])
-  const [currentStopIndex, setCurrentStopIndex] = useState(0)
-  const [isAtStop, setIsAtStop] = useState(false)
+  
+  const [currentRoute, setCurrentRoute] = useState<any>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("transify_driver_current_route")
+      return cached ? JSON.parse(cached) : null
+    }
+    return null
+  })
+  const [dynamicStops, setDynamicStops] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("transify_driver_dynamic_stops")
+      return cached ? JSON.parse(cached) : []
+    }
+    return []
+  })
+  const [currentStopIndex, setCurrentStopIndex] = useState(() => {
+    if (typeof window !== "undefined") {
+      return parseInt(localStorage.getItem("transify_driver_stop_index") || "0")
+    }
+    return 0
+  })
+  const [isAtStop, setIsAtStop] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("transify_driver_is_at_stop") === "true"
+    }
+    return false
+  })
+
+  // Persist state changes to localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    localStorage.setItem("transify_driver_trip_state", tripState)
+    localStorage.setItem("transify_driver_trip_direction", tripDirection)
+    localStorage.setItem("transify_driver_stop_index", currentStopIndex.toString())
+    localStorage.setItem("transify_driver_is_at_stop", isAtStop.toString())
+  }, [tripState, tripDirection, currentStopIndex, isAtStop])
+
   const [geocodedStops, setGeocodedStops] = useState<({ lat: number; lng: number } | null)[]>([])
   const [deviationAlertSent, setDeviationAlertSent] = useState(false)
   // Track if we already auto-advanced to avoid double-trigger
@@ -167,7 +239,16 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   // Track proximity alerts sent to avoid spamming
   const proximityAlertsSent = useRef<Set<number>>(new Set())
   // Track active trip_sessions doc ID (for updating on trip end)
-  const activeTripDocId = useRef<string | null>(null)
+  const activeTripDocId = useRef<string | null>(typeof window !== "undefined" ? localStorage.getItem("transify_driver_active_trip_id") : null)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (activeTripDocId.current) {
+      localStorage.setItem("transify_driver_active_trip_id", activeTripDocId.current)
+    } else {
+      localStorage.removeItem("transify_driver_active_trip_id")
+    }
+  }, [activeTripDocId.current])
 
   // 4. Live tracking (Moved up to fix declaration order)
   const { location, error: gpsError } = useLiveTracking(
@@ -403,37 +484,47 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
       if (data.drivers) {
         const userPhoneDigits = normalize(profile.phone)
         const currentDriver = data.drivers.find((d: any) => normalize(d.phone) === userPhoneDigits || d.phone === profile.phone)
-        if (currentDriver) {
-          setRealName(currentDriver.name)
-          setDriverId(currentDriver.id)
-          setDriverPhone(currentDriver.phone || profile.phone || "")
-          setDriverPhoto(currentDriver.photo_url || "")
-          
-          const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
-          if (targetVehId && targetVehId !== "Unassigned") {
-            setAssignedVehicleId(targetVehId)
+          if (currentDriver) {
+            setRealName(currentDriver.name)
+            setDriverId(currentDriver.id)
+            setDriverPhone(currentDriver.phone || profile.phone || "")
+            setDriverPhoto(currentDriver.photo_url || "")
+            
+            const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
+            if (targetVehId && targetVehId !== "Unassigned") {
+              setAssignedVehicleId(targetVehId)
+            }
+
+            // Sync to cache
+            localStorage.setItem("transify_driver_name", currentDriver.name)
+            localStorage.setItem("transify_driver_id", currentDriver.id)
+            localStorage.setItem("transify_driver_phone", currentDriver.phone || profile.phone || "")
+            localStorage.setItem("transify_driver_photo", currentDriver.photo_url || "")
+            if (targetVehId) localStorage.setItem("transify_driver_assigned_veh_id", targetVehId)
           }
         }
-      }
-    } catch (e) { console.error("Failed to fetch driver info:", e) }
-    finally { setIsVerifying(false) }
-  }, [resolvedOrgId, profile?.phone]) // Removed realName, selectedVehicle, vehicles
-
-  // 2. Fetch vehicles
-  const fetchVehicles = useCallback(async () => {
-    if (!resolvedOrgId) return
-    try {
-      const res = await fetch(`/api/vehicles/list?organization_id=${resolvedOrgId}`)
-      const data = await res.json()
-      if (data.vehicles) {
-        setVehicles(data.vehicles)
-        // Auto-select if only one vehicle exists
-        if (data.vehicles.length === 1) {
-          setSelectedVehicle(data.vehicles[0])
+      } catch (e) { console.error("Failed to fetch driver info:", e) }
+      finally { setIsVerifying(false) }
+    }, [resolvedOrgId, profile?.phone])
+  
+    // 2. Fetch vehicles
+    const fetchVehicles = useCallback(async () => {
+      if (!resolvedOrgId) return
+      try {
+        const res = await fetch(`/api/vehicles/list?organization_id=${resolvedOrgId}`)
+        const data = await res.json()
+        if (data.vehicles) {
+          setVehicles(data.vehicles)
+          localStorage.setItem("transify_driver_vehicles", JSON.stringify(data.vehicles))
+          
+          // Auto-select if only one vehicle exists
+          if (data.vehicles.length === 1) {
+            setSelectedVehicle(data.vehicles[0])
+            localStorage.setItem("transify_driver_selected_vehicle", JSON.stringify(data.vehicles[0]))
+          }
         }
-      }
-    } catch (e) { console.error("Failed to fetch vehicles:", e) }
-  }, [resolvedOrgId]) // Removed selectedVehicle
+      } catch (e) { console.error("Failed to fetch vehicles:", e) }
+    }, [resolvedOrgId])
 
   // 3. Real-time route listener (Firestore onSnapshot)
   useEffect(() => {
@@ -442,26 +533,32 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     const q = query(collection(db, "routes"), where("organization_id", "==", resolvedOrgId), where("vehicle_id", "in", ids))
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const routeDoc = snapshot.docs[0]
-      if (routeDoc) {
-        const route = routeDoc.data()
-        setCurrentRoute({ id: routeDoc.id, ...route })
-        const baseStops = [
-          { name: route.start_point, lat: route.start_lat ?? null, lng: route.start_lng ?? null },
-          ...(route.stops || []).map((s: any) => (
-            typeof s === 'string' 
-              ? { name: s, lat: null, lng: null } 
-              : { name: s.name, lat: s.lat ?? null, lng: s.lng ?? null }
-          )),
-          { name: route.end_point, lat: route.end_lat ?? null, lng: route.end_lng ?? null }
-        ]
-        // If from-school, reverse the entire sequence
-        if (tripDirection === "from-school") {
-          setDynamicStops([...baseStops].reverse())
-        } else {
-          setDynamicStops(baseStops)
+        if (routeDoc) {
+          const route = routeDoc.data()
+          const fullRoute = { id: routeDoc.id, ...route }
+          setCurrentRoute(fullRoute)
+          localStorage.setItem("transify_driver_current_route", JSON.stringify(fullRoute))
+
+          const baseStops = [
+            { name: route.start_point, lat: route.start_lat ?? null, lng: route.start_lng ?? null },
+            ...(route.stops || []).map((s: any) => (
+              typeof s === 'string' 
+                ? { name: s, lat: null, lng: null } 
+                : { name: s.name, lat: s.lat ?? null, lng: s.lng ?? null }
+            )),
+            { name: route.end_point, lat: route.end_lat ?? null, lng: route.end_lng ?? null }
+          ]
+          
+          let finalStops = baseStops
+          // If from-school, reverse the entire sequence
+          if (tripDirection === "from-school") {
+            finalStops = [...baseStops].reverse()
+          }
+          
+          setDynamicStops(finalStops)
+          localStorage.setItem("transify_driver_dynamic_stops", JSON.stringify(finalStops))
         }
-      }
-    }, (err) => console.error("Route listener error:", err))
+      }, (err) => console.error("Route listener error:", err))
     return () => unsubscribe()
   }, [resolvedOrgId, selectedVehicle?.id, selectedVehicle?.plate_number, tripDirection])
 

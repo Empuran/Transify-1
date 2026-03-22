@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react"
 import {
-  Bus, Users, AlertTriangle, Clock, Activity, Plus, ChevronRight,
+  Bus, Users, AlertTriangle, AlertCircle, Clock, Activity, Plus, ChevronRight,
   Search, Download, Route, UserPlus, BarChart3, TrendingUp, Star,
   Navigation, GraduationCap, Bell, Settings, LogOut, Menu,
   Home, Briefcase, FileText, CheckCircle2, ArrowUpRight, ArrowDownRight,
@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
-import { collection, onSnapshot, query, where, orderBy, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp, addDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, where, orderBy, limit, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp, addDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { AddStudentForm } from "./admin-form-add-student"
 import { AddDriverForm } from "./admin-form-add-driver"
@@ -39,7 +39,7 @@ function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase().replace(/[-_ ]/g, "-") // Normalize to hyphen-separated
   const isSuccess = ["on-time", "on-duty", "at-school", "active", "online"].includes(s)
   const isWarning = ["delayed", "idle"].includes(s)
-  const isDanger = ["emergency", "sos", "offline"].includes(s)
+  const isDanger = ["emergency", "sos", "offline", "removed"].includes(s)
   const isPrimary = ["on-bus", "in-progress", "moving"].includes(s)
   const isMuted = ["off-duty", "completed", "stationary"].includes(s)
 
@@ -72,33 +72,62 @@ function StatusBadge({ status }: { status: string }) {
 // ── Audit Log Section (Super Admin only) ─────────────────────────────────────
 function AuditLogSection({ organizationId }: { organizationId?: string }) {
   const [logs, setLogs] = useState<any[]>([])
+  const [indexError, setIndexError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
 
-  const fetchLogs = useCallback(async () => {
+  useEffect(() => {
     if (!organizationId) return
     setLoading(true)
-    try {
-      let url = `/api/admin/audit-logs?organization_id=${organizationId}&limit=200`
-      if (startDate) url += `&start_date=${startDate}`
-      if (endDate) url += `&end_date=${endDate}`
-      const res = await fetch(url)
-      const data = await res.json()
-      setLogs(data.logs || [])
-    } catch { }
-    finally { setLoading(false) }
-  }, [organizationId, startDate, endDate])
+    
+    let q = query(
+      collection(db, "audit_logs"),
+      where("organization_id", "==", organizationId),
+      orderBy("timestamp", "desc"),
+      limit(200)
+    )
 
-  useEffect(() => { fetchLogs() }, [fetchLogs])
+    // Note: startDate/endDate filtering is better done locally if we want instant reaction,
+    // or as a query if we have the necessary indexes. For now, we'll keep the snapshot and filter in useMemo.
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const allLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setLogs(allLogs)
+      setIndexError(null)
+      setLoading(false)
+    }, (err: any) => {
+      console.error("Audit log listener error:", err)
+      if (err.message?.includes("index")) {
+        setIndexError(err.message)
+      }
+      setLoading(false)
+    })
 
-  const filtered = useMemo(() => logs.filter((l: any) =>
-    !search ||
-    (l.admin_email || "").toLowerCase().includes(search.toLowerCase()) ||
-    (l.action || "").toLowerCase().includes(search.toLowerCase()) ||
-    (l.details || "").toLowerCase().includes(search.toLowerCase())
-  ), [logs, search])
+    return () => unsubscribe()
+  }, [organizationId])
+
+  const filtered = useMemo(() => {
+    let list = logs.filter((l: any) =>
+      !search ||
+      (l.admin_email || "").toLowerCase().includes(search.toLowerCase()) ||
+      (l.action || "").toLowerCase().includes(search.toLowerCase()) ||
+      (l.details || "").toLowerCase().includes(search.toLowerCase())
+    );
+
+    if (startDate || endDate) {
+      const start = startDate ? new Date(startDate).setHours(0, 0, 0, 0) : 0;
+      const end = endDate ? new Date(endDate).setHours(23, 59, 59, 999) : Infinity;
+      
+      list = list.filter(l => {
+        const t = new Date(l.timestamp).getTime();
+        return t >= start && t <= end;
+      });
+    }
+
+    return list;
+  }, [logs, search, startDate, endDate])
 
   const typeBadge = (action: string = "") => {
     const a = action.toLowerCase()
@@ -112,10 +141,10 @@ function AuditLogSection({ organizationId }: { organizationId?: string }) {
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-foreground">Audit Log</h1>
-        <button onClick={fetchLogs}
-          className="flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted transition-colors">
-          Refresh
-        </button>
+        <div className="flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-[10px] font-medium text-muted-foreground animate-pulse">
+          <div className="h-1.5 w-1.5 rounded-full bg-success" />
+          Live
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-48 max-w-xs">
@@ -132,7 +161,21 @@ function AuditLogSection({ organizationId }: { organizationId?: string }) {
 
       <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
         {loading && <div className="flex justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}
-        {!loading && filtered.length === 0 && (
+        {indexError ? (
+          <div className="flex flex-col items-center gap-3 py-12 px-8 text-center bg-destructive/5">
+            <AlertCircle className="h-8 w-8 text-destructive opacity-80" />
+            <p className="text-sm font-bold text-destructive">Firestore Index Required</p>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              Sorting and filtering requires a composite index. Please click the link below to create it in Firebase Console:
+              <br />
+              <a href={indexError.match(/https:\/\/console\.firebase\.google\.com[^\s]*/)?.[0] || "#"} 
+                 target="_blank" rel="noreferrer" className="mt-2 inline-block text-primary underline truncate w-full">
+                Create Index
+              </a>
+            </p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => window.location.reload()}>Retry After Creating</Button>
+          </div>
+        ) : !loading && filtered.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
             <FileText className="h-8 w-8 opacity-30" />
             <p className="text-sm">No audit entries found</p>
@@ -181,7 +224,7 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
         <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
       </button>
       {open && (
-        <div className="absolute top-full left-0 z-20 mt-1 min-w-32 rounded-xl border border-border bg-card shadow-lg p-1">
+        <div className="absolute top-full left-0 z-50 mt-1 min-w-32 max-h-64 overflow-y-auto rounded-xl border border-border bg-card shadow-lg p-1">
           {["all", ...options].map(opt => (
             <button key={opt} onClick={() => { onChange(opt); setOpen(false) }}
               className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors capitalize",
@@ -200,21 +243,35 @@ function FilterDropdown({ label, options, value, onChange }: { label: string; op
 function RecentActivityWidget({ organizationId, onViewLogs }: { organizationId?: string; onViewLogs: () => void }) {
   const [logs, setLogs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [indexError, setIndexError] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 5
 
   useEffect(() => {
     if (!organizationId) { setLoading(false); return }
-    fetch(`/api/admin/audit-logs?organization_id=${organizationId}&limit=20`)
-      .then(r => r.json())
-      .then(d => {
-        const dayAgo = Date.now() - 24 * 60 * 60 * 1000
-        const recent = (d.logs || []).filter((l: any) => {
-          const t = l.timestamp ? new Date(l.timestamp).getTime() : 0
-          return t >= dayAgo
-        }).slice(0, 5)
-        setLogs(recent)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
+    
+    const q = query(
+      collection(db, "audit_logs"),
+      where("organization_id", "==", organizationId),
+      where("timestamp", ">=", sixHoursAgo),
+      orderBy("timestamp", "desc")
+    )
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const recent = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setLogs(recent)
+      setIndexError(null)
+      setLoading(false)
+    }, (err: any) => {
+      console.error("Recent Activity listener error:", err)
+      if (err.message?.includes("index")) {
+        setIndexError(err.message)
+      }
+      setLoading(false)
+    })
+
+    return () => unsubscribe()
   }, [organizationId])
 
   const relTime = (ts: string) => {
@@ -238,33 +295,68 @@ function RecentActivityWidget({ organizationId, onViewLogs }: { organizationId?:
   }
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm flex flex-col">
+    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm flex flex-col h-full">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
-        <span className="text-[10px] font-bold text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Last 24h</span>
+        <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">Last 6h</span>
       </div>
-      <div className="flex flex-col gap-3 flex-1">
+      <div className="flex flex-col gap-3 flex-1 overflow-y-auto max-h-[250px] pr-1">
         {loading && <div className="flex justify-center py-6"><div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>}
-        {!loading && logs.length === 0 && (
-          <p className="text-xs text-muted-foreground italic py-4 text-center">No activity in the last 24 hours.</p>
-        )}
-        {!loading && logs.map((log: any, i: number) => (
-          <div key={log.id || i} className="flex items-start gap-3">
-            <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", actionBg(log.action))}>
-              {actionIcon(log.action)}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground truncate">{log.details || "Action performed"}</p>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-[10px] text-muted-foreground truncate">{log.admin_name || log.admin_email || "Admin"}</p>
-                <span className="text-[10px] text-muted-foreground/50">·</span>
-                <p className="text-[10px] text-muted-foreground shrink-0">{log.timestamp ? relTime(log.timestamp) : "—"}</p>
-              </div>
-            </div>
+        {indexError ? (
+          <div className="flex flex-col items-center gap-2 py-4 px-2 text-center bg-destructive/5 rounded-xl border border-destructive/20">
+            <AlertCircle className="h-5 w-5 text-destructive opacity-70" />
+            <p className="text-[10px] font-bold text-destructive">Index Required</p>
+            <a href={indexError.match(/https:\/\/console\.firebase\.google\.com[^\s]*/)?.[0] || "#"} 
+               target="_blank" rel="noreferrer" className="text-[9px] text-primary underline truncate w-full">
+              Click to Create Index
+            </a>
           </div>
-        ))}
+        ) : !loading && logs.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic py-4 text-center">No activity in the last 6 hours.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {logs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((log: any, i: number) => (
+              <div key={log.id || i} className="flex items-start gap-3 animate-in fade-in slide-in-from-right-1 duration-300" style={{ animationDelay: `${i * 50}ms` }}>
+                <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", actionBg(log.action))}>
+                  {actionIcon(log.action)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{log.details || "Action performed"}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-[10px] text-muted-foreground truncate">{log.admin_name || log.admin_email || "Admin"}</p>
+                    <span className="text-[10px] text-muted-foreground/50">·</span>
+                    <p className="text-[10px] text-muted-foreground shrink-0">{log.timestamp ? relTime(log.timestamp) : "—"}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <button onClick={onViewLogs} className="mt-4 w-full rounded-xl bg-muted/50 p-2.5 text-xs font-semibold text-primary transition-colors hover:bg-muted">View Detailed Logs</button>
+      
+      {!loading && logs.length > itemsPerPage && (
+        <div className="flex items-center justify-between mt-4 px-1">
+          <button 
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            className="p-1 px-2 rounded-lg bg-muted/50 text-[10px] font-bold text-muted-foreground disabled:opacity-30 hover:bg-muted transition-colors"
+          >
+            Prev
+          </button>
+          <span className="text-[10px] font-bold text-muted-foreground/60">
+            {currentPage} / {Math.ceil(logs.length / itemsPerPage)}
+          </span>
+          <button 
+            disabled={currentPage >= Math.ceil(logs.length / itemsPerPage)}
+            onClick={() => setCurrentPage(p => p + 1)}
+            className="p-1 px-2 rounded-lg bg-muted/50 text-[10px] font-bold text-muted-foreground disabled:opacity-30 hover:bg-muted transition-colors"
+          >
+            Next
+          </button>
+        </div>
+      )}
+
+      <button onClick={onViewLogs} className="mt-4 w-full rounded-xl bg-primary/5 p-2.5 text-xs font-bold text-primary transition-all hover:bg-primary/10 border border-primary/10">View Detailed Logs</button>
     </div>
   )
 }
@@ -306,7 +398,15 @@ export function AdminDashboard() {
   const [dashboardDate, setDashboardDate] = useState<string>(new Date().toISOString().split("T")[0])
 
   // ── Notifications ───────────────────────────────────────────────────────
-  const [notifications, setNotifications] = useState<any[]>([])
+  const [notifications, setNotifications] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("transify_admin_cache_notifications")
+        if (cached) return JSON.parse(cached)
+      } catch (e) {}
+    }
+    return []
+  })
   const [showNotifications, setShowNotifications] = useState(false)
   const [showProfileDropdown, setShowProfileDropdown] = useState(false)
   const [dashboardDateEnd, setDashboardDateEnd] = useState<string>("")
@@ -411,7 +511,15 @@ export function AdminDashboard() {
   const [memberRouteFilter, setMemberRouteFilter] = useState("all")
   const [memberSectionFilter, setMemberSectionFilter] = useState("all")
   const [memberGradeFilter, setMemberGradeFilter] = useState("all")
-  const [studentsData, setStudentsData] = useState<any[]>([])
+  const [studentsData, setStudentsData] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("transify_admin_cache_students")
+        if (cached) return JSON.parse(cached)
+      } catch (e) {}
+    }
+    return []
+  })
 
   const fetchStudents = useCallback(() => {
     const orgId = adminSession?.organization_id
@@ -423,6 +531,9 @@ export function AdminDashboard() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const students = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
       setStudentsData(students)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("transify_admin_cache_students", JSON.stringify(students))
+      }
     }, (err) => console.error("Firestore student listener error:", err))
     return unsubscribe
   }, [adminSession?.organization_id])
@@ -462,7 +573,15 @@ export function AdminDashboard() {
   const [driverSearch, setDriverSearch] = useState("")
   const [driverStatusFilter, setDriverStatusFilter] = useState("all")
   const [driverLicenseFilter, setDriverLicenseFilter] = useState("all")
-  const [driversData, setDriversData] = useState<any[]>([])
+  const [driversData, setDriversData] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("transify_admin_cache_drivers")
+        if (cached) return JSON.parse(cached)
+      } catch (e) {}
+    }
+    return []
+  })
 
   const fetchDrivers = useCallback(() => {
     const orgId = adminSession?.organization_id
@@ -474,6 +593,9 @@ export function AdminDashboard() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const drivers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
       setDriversData(drivers)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("transify_admin_cache_drivers", JSON.stringify(drivers))
+      }
     }, (err) => console.error("Firestore driver listener error:", err))
     return unsubscribe
   }, [adminSession?.organization_id])
@@ -526,7 +648,15 @@ export function AdminDashboard() {
   const [vehicleTypeFilter, setVehicleTypeFilter] = useState("all")
   const [vehicleRouteFilter, setVehicleRouteFilter] = useState("all")
   const [vehicleExpiringFilter, setVehicleExpiringFilter] = useState("all")
-  const [vehiclesData, setVehiclesData] = useState<any[]>([])
+  const [vehiclesData, setVehiclesData] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("transify_admin_cache_vehicles")
+        if (cached) return JSON.parse(cached)
+      } catch (e) {}
+    }
+    return []
+  })
 
   const fetchVehicles = useCallback(() => {
     const orgId = adminSession?.organization_id
@@ -542,6 +672,9 @@ export function AdminDashboard() {
       // Manual sort by created_at since combined queries might need indexes
       vehicles.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
       setVehiclesData(vehicles)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("transify_admin_cache_vehicles", JSON.stringify(vehicles))
+      }
     }, (err) => {
       console.error("Firestore vehicle listener error:", err)
     })
@@ -584,7 +717,15 @@ export function AdminDashboard() {
 
   // ── Route Filters ───────────────────────────────────────────────────────
   const [routeSearch, setRouteSearch] = useState("")
-  const [routesData, setRoutesData] = useState<any[]>([])
+  const [routesData, setRoutesData] = useState<any[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("transify_admin_cache_routes")
+        if (cached) return JSON.parse(cached)
+      } catch (e) {}
+    }
+    return []
+  })
 
   const fetchRoutes = useCallback(() => {
     const orgId = adminSession?.organization_id
@@ -596,6 +737,9 @@ export function AdminDashboard() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const routes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
       setRoutesData(routes)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("transify_admin_cache_routes", JSON.stringify(routes))
+      }
     }, (err) => console.error("Firestore route listener error:", err))
     return unsubscribe
   }, [adminSession?.organization_id])
@@ -637,6 +781,9 @@ export function AdminDashboard() {
       // Sort newest first in memory
       notifs.sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
       setNotifications(notifs)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("transify_admin_cache_notifications", JSON.stringify(notifs))
+      }
     })
     return unsubscribe
   }, [adminSession?.organization_id])
@@ -1100,7 +1247,7 @@ export function AdminDashboard() {
         <main className="flex-1 overflow-y-auto p-6">
 
           {/* OVERVIEW */}
-          {section === "overview" && (
+          <div className={section === "overview" ? "block" : "hidden"}>
             <div className="flex flex-col gap-6">
               {/* Fleet Overview header + date range */}
               <div className="flex flex-wrap items-center gap-3">
@@ -1204,10 +1351,10 @@ export function AdminDashboard() {
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* LIVE TRACKING */}
-          {section === "tracking" && (
+          <div className={section === "tracking" ? "block" : "hidden"}>
             <div className="flex flex-col gap-6">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <h1 className="text-2xl font-bold text-foreground">Live Tracking</h1>
@@ -1301,10 +1448,10 @@ export function AdminDashboard() {
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* MEMBERS (Students / Employees) */}
-          {section === "members" && (
+          <div className={section === "members" ? "block" : "hidden"}>
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">{memberLabel}</h1>
@@ -1322,17 +1469,20 @@ export function AdminDashboard() {
                 </div>
                 <FilterDropdown
                   label={isCorporate ? "Department" : "Grade"}
-                  options={[...new Set(studentsData.map(s => isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")).filter(Boolean))]}
+                  options={isCorporate 
+                    ? [...new Set(studentsData.map(s => s.dept || s.department || "").filter(Boolean))]
+                    : ["LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12"]
+                  }
                   value={memberGradeFilter}
                   onChange={setMemberGradeFilter}
                 />
-                <FilterDropdown label="Route" options={[...new Set(studentsData.map(s => s.route || s.route_name || "").filter(Boolean))]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
                 <FilterDropdown 
                   label="Section" 
                   options={isCorporate ? [] : "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")} 
                   value={memberSectionFilter} 
                   onChange={setMemberSectionFilter} 
                 />
+                <FilterDropdown label="Route" options={[...new Set(studentsData.map(s => s.route || s.route_name || "").filter(Boolean))]} value={memberRouteFilter} onChange={setMemberRouteFilter} />
                 {(memberGradeFilter !== "all" || memberRouteFilter !== "all" || memberSectionFilter !== "all" || memberSearch) && (
                   <button onClick={() => { setMemberGradeFilter("all"); setMemberRouteFilter("all"); setMemberSectionFilter("all"); setMemberSearch("") }}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
@@ -1385,7 +1535,7 @@ export function AdminDashboard() {
                         <td className="px-5 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button onClick={() => { setEditingStudent(s); setActiveForm("student") }}
-                              className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors" title="Edit">
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
                             {s.lifecycle_status === "INACTIVE" ? (
@@ -1420,10 +1570,10 @@ export function AdminDashboard() {
                 </table>
               </div>
             </div>
-          )}
+          </div>
 
           {/* DRIVERS */}
-          {section === "drivers" && (
+          <div className={section === "drivers" ? "block" : "hidden"}>
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">Drivers</h1>
@@ -1458,8 +1608,8 @@ export function AdminDashboard() {
                   <Button variant="outline" size="sm" onClick={() => window.open(`/api/drivers/export?organization_id=${adminSession?.organization_id}&status=${showRemovedDrivers ? 'inactive' : 'active'}`, '_blank')} className="h-9 gap-2">
                     <Download className="h-4 w-4" /> Export CSV
                   </Button>
-                  <span className="text-xs text-muted-foreground ml-2">{filteredDrivers.length} of {driversData.length}</span>
                 </div>
+                <span className="ml-auto text-xs text-muted-foreground font-medium">{filteredDrivers.length} of {driversData.length}</span>
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -1482,8 +1632,7 @@ export function AdminDashboard() {
                             <div className="flex items-center gap-3">
                               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
                                 <span className="text-xs font-bold text-primary">{d.name?.split(" ").map((n: string) => n[0]).join("")}</span>
-                                <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card bg-success" />
-                              </div>
+                             </div>
                               <div className="flex flex-col min-w-0">
                                 <span className="text-sm font-bold text-foreground truncate">{d.name}</span>
                                 <span className="text-[10px] text-muted-foreground">ID: {d.id.slice(-6)}</span>
@@ -1504,56 +1653,44 @@ export function AdminDashboard() {
                              </div>
                           </td>
                           <td className="px-5 py-4 text-center">
-                            <StatusBadge status={d.status || "off-duty"} />
+                            <StatusBadge status={d.lifecycle_status === "INACTIVE" ? "removed" : (d.status || "idle")} />
                           </td>
-                          <td className="px-5 py-4">
+                          <td className="px-5 py-4 text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <button onClick={() => setEditingDriver(d)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Edit">
-                                <Pencil className="h-4 w-4 text-muted-foreground" />
+                              <button onClick={() => { setEditingDriver(d); setActiveForm("driver") }}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors" title="Edit">
+                                <Pencil className="h-3.5 w-3.5" />
                               </button>
-                              {d.lifecycle_status === "INACTIVE" ? (
-                                <button onClick={async () => {
-                                  if (!confirm(`Restore driver "${d.name}"?`)) return
-                                  try {
-                                    const res = await fetch("/api/drivers/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName }) })
-                                    if (!res.ok) throw new Error((await res.json()).error)
-                                    showToast("Driver restored")
-                                  } catch (err: any) { alert(err.message || "Restore failed") }
-                                }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-success/10 transition-colors" title="Restore">
-                                  <Activity className="h-4 w-4 text-success" />
-                                </button>
-                              ) : (
-                                <button onClick={() => setRemovalTarget({ entity: d, type: "driver" })}
-                                  className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Remove">
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </button>
-                              )}
+                                {d.lifecycle_status === "INACTIVE" ? (
+                                  <button onClick={async () => {
+                                    if (!confirm(`Restore driver "${d.name}"?`)) return
+                                    try {
+                                      const res = await fetch("/api/drivers/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName }) })
+                                      if (!res.ok) throw new Error((await res.json()).error)
+                                      showToast("Driver restored")
+                                    } catch (err: any) { alert(err.message || "Restore failed") }
+                                  }} className="p-1.5 rounded-lg text-muted-foreground hover:text-success hover:bg-success/10 transition-colors" title="Restore">
+                                    <Activity className="h-4 w-4 text-success" />
+                                  </button>
+                                ) : (
+                                  <button onClick={() => setRemovalTarget({ entity: d, type: "driver" })}
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="Remove">
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                             </div>
                           </td>
                         </tr>
                       ))}
-                      {filteredDrivers.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-20 text-center">
-                            <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                              <div className="rounded-full bg-muted p-4">
-                                <Filter className="h-10 w-10 opacity-20" />
-                              </div>
-                              <p className="text-sm font-medium">No drivers match the current filters.</p>
-                              <button onClick={() => { setDriverStatusFilter("all"); setDriverLicenseFilter("all"); setDriverSearch("") }} className="text-xs text-primary hover:underline">Clear all filters</button>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
                     </tbody>
                   </table>
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* VEHICLES */}
-          {section === "vehicles" && (
+          <div className={section === "vehicles" ? "block" : "hidden"}>
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">Vehicles</h1>
@@ -1753,10 +1890,10 @@ export function AdminDashboard() {
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* ROUTES */}
-          {section === "routes" && (
+          <div className={section === "routes" ? "block" : "hidden"}>
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">Routes</h1>
@@ -1853,10 +1990,10 @@ export function AdminDashboard() {
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* REPORTS */}
-          {section === "reports" && (
+          <div className={section === "reports" ? "block" : "hidden"}>
             <div className="flex flex-col gap-6">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">Reports & Analytics</h1>
@@ -2078,12 +2215,12 @@ export function AdminDashboard() {
                 </div>
               )}
             </div>
-          )}
+          </div>
 
           {/* Settings etc... */}
 
           {/* SETTINGS */}
-          {section === "settings" && (
+          <div className={section === "settings" ? "block" : "hidden"}>
             <div className="flex flex-col gap-6 max-w-2xl">
               <h1 className="text-2xl font-bold text-foreground">Settings</h1>
               {[
@@ -2106,18 +2243,20 @@ export function AdminDashboard() {
                 </Button>
               </div>
             </div>
-          )}
+          </div>
 
           {/* ADMIN MANAGEMENT (Super Admin only) */}
-          {section === "admins" && adminSession && (
-            <AdminManagement adminSession={adminSession} />
-          )}
+          <div className={section === "admins" ? "block" : "hidden"}>
+            {adminSession && (
+              <AdminManagement adminSession={adminSession} />
+            )}
+          </div>
 
         </main>
       </div>
 
       {/* Forms */}
-      {(activeForm === "student" || editingStudent) && <AddStudentForm initialData={editingStudent} isCorporate={isCorporate} onClose={() => { setActiveForm(null); setEditingStudent(null) }} onSave={() => { showToast(editingStudent ? `${memberLabel.slice(0, -1)} updated` : `${memberLabel.slice(0, -1)} added successfully`) }} />}
+      {(activeForm === "student" || editingStudent) && <AddStudentForm initialData={editingStudent} isCorporate={isCorporate} onClose={() => { setActiveForm(null); setEditingStudent(null) }} onSave={() => { showToast(editingStudent ? `${memberLabel.slice(0, -1)} updated` : `${memberLabel.slice(0, -1)} added successfully`); fetchStudents() }} />}
       {(activeForm === "driver" || editingDriver) && (
         <AddDriverForm
           initialData={editingDriver}
@@ -2416,6 +2555,8 @@ export function AdminDashboard() {
             } finally {
               setRemovalLoading(false)
               setRemovalTarget(null)
+              fetchStudents()
+              fetchDrivers()
             }
           }}
         />
