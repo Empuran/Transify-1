@@ -5,6 +5,9 @@ import { X, Bus, Users, Hash, Check, ChevronDown, Calendar, Shield, Wrench, Cpu,
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { db } from "@/lib/firebase"
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { clientAuditLog } from "@/lib/audit-logger-client"
 
 interface AddVehicleFormProps {
     initialData?: any
@@ -96,25 +99,27 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
         const orgId = adminData?.organization_id
         if (!orgId) return
 
-        // Fetch Drivers
-        fetch(`/api/drivers/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.drivers) {
-                    const options = d.drivers.map((dr: any) => ({ name: dr.name, id: dr.id, photo_url: dr.photo_url, phone: dr.phone || dr.phone_number || "" }))
-                    setDriverOptions([...options, { name: "Unassigned", id: "" }])
-                }
-            }).catch(() => { })
+        const fetchData = async () => {
+            try {
+                // Fetch Drivers
+                const dQ = query(collection(db, "drivers"), where("organization_id", "==", orgId), where("lifecycle_status", "==", "ACTIVE"))
+                const dSnap = await getDocs(dQ)
+                const dOptions = dSnap.docs.map(doc => {
+                    const d = doc.data()
+                    return { name: d.name, id: doc.id, photo_url: d.photo_url, phone: d.phone || d.phone_number || "" }
+                })
+                setDriverOptions([...dOptions, { name: "Unassigned", id: "" }])
 
-        // Fetch Routes
-        fetch(`/api/routes/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.routes) {
-                    const options = d.routes.map((ro: any) => ({ name: ro.route_name, id: ro.id }))
-                    setRouteOptions([...options, { name: "Unassigned", id: "" }])
-                }
-            }).catch(() => { })
+                // Fetch Routes
+                const rQ = query(collection(db, "routes"), where("organization_id", "==", orgId))
+                const rSnap = await getDocs(rQ)
+                const rOptions = rSnap.docs.map(doc => ({ name: doc.data().route_name, id: doc.id }))
+                setRouteOptions([...rOptions, { name: "Unassigned", id: "" }])
+            } catch (err) {
+                console.error("Failed to fetch drivers/routes:", err)
+            }
+        }
+        fetchData()
     }, [])
 
     const isValid = data.plateNumber.trim() && data.type && data.capacity.trim()
@@ -129,22 +134,24 @@ export function AddVehicleForm({ onClose, onSave, initialData }: AddVehicleFormP
         if (!orgId) { alert("Organization not found. Please log in again."); return }
 
         try {
-            const endpoint = initialData ? "/api/vehicles/update" : "/api/vehicles/add"
-            const payload = { 
-                ...data, 
-                vehicle_id: initialData?.id, 
-                organization_id: orgId, 
-                admin_id: adminData?.user_id, 
-                admin_email: adminData?.email 
+            const vehiclePayload = {
+                ...data,
+                organization_id: orgId,
+                updated_at: serverTimestamp(),
+                plate_number: data.plateNumber, // Sync fields
+                fuel_type: data.fuelType
             }
 
-            const res = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
-            const result = await res.json()
-            if (!res.ok) throw new Error(result.error)
+            if (initialData) {
+                await updateDoc(doc(db, "vehicles", initialData.id), vehiclePayload)
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "VEHICLE_UPDATE", `Updated vehicle ${data.plateNumber}`)
+            } else {
+                await addDoc(collection(db, "vehicles"), {
+                    ...vehiclePayload,
+                    created_at: serverTimestamp()
+                })
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "VEHICLE_ADD", `Registered new vehicle ${data.plateNumber}`)
+            }
 
             setSaved(true)
             setTimeout(() => { onSave(data); onClose() }, 800)

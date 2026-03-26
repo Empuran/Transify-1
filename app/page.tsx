@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from "react"
 import { useAuth } from "@/hooks/use-auth"
 import { SplashScreen } from "@/components/transify/splash-screen"
 import { useRouter } from "next/navigation"
+import { FirebaseStatusCheck } from "@/components/FirebaseTest";
 
 export default function TransifyRoot() {
   const { user, profile, loading, currentRole } = useAuth()
@@ -30,8 +31,9 @@ export default function TransifyRoot() {
   }
 
   return (
-    <div className="flex h-dvh items-center justify-center bg-background">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    <div className="flex h-dvh flex-col items-center justify-center bg-background">
+      <FirebaseStatusCheck />
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mt-4" />
     </div>
   )
 }

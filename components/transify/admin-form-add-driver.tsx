@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { compressImage } from "@/lib/utils"
+import { db } from "@/lib/firebase"
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { clientAuditLog } from "@/lib/audit-logger-client"
 
 interface AddDriverFormProps {
     initialData?: any
@@ -53,14 +56,18 @@ export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormPro
         const adminData = session ? JSON.parse(session) : null
         const orgId = adminData?.organization_id
         if (!orgId) return
-        fetch(`/api/vehicles/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.vehicles) {
-                    const plates = d.vehicles.map((v: any) => v.plate_number || v.id)
-                    setVehicleOptions([...plates, "Unassigned"])
-                }
-            }).catch(() => { })
+
+        const getVehicles = async () => {
+            try {
+                const q = query(collection(db, "vehicles"), where("organization_id", "==", orgId))
+                const snap = await getDocs(q)
+                const plates = snap.docs.map(doc => doc.data().plate_number || doc.id)
+                setVehicleOptions([...plates, "Unassigned"])
+            } catch (err) {
+                console.error("Failed to fetch vehicles:", err)
+            }
+        }
+        getVehicles()
     }, [])
 
     const isValid = data.name.trim() && data.phone.trim() && data.licenseNumber.trim() && data.licenseType
@@ -85,19 +92,24 @@ export function AddDriverForm({ onClose, onSave, initialData }: AddDriverFormPro
                 finalPhotoUrl = await compressImage(photoFile, 500, 500, 0.6);
             }
 
-            const endpoint = initialData ? "/api/drivers/update" : "/api/drivers/add"
-            const payload = initialData
-                ? { ...data, photo_url: finalPhotoUrl, driver_id: initialData.id, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
-                : { ...data, photo_url: finalPhotoUrl, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email }
+            const driverPayload = {
+                ...data,
+                photo_url: finalPhotoUrl,
+                organization_id: orgId,
+                updated_at: serverTimestamp(),
+                lifecycle_status: initialData?.lifecycle_status || "ACTIVE"
+            }
 
-            const res = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
-
-            const result = await res.json()
-            if (!res.ok) throw new Error(result.error)
+            if (initialData) {
+                await updateDoc(doc(db, "drivers", initialData.id), driverPayload)
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "DRIVER_UPDATE", `Updated driver ${data.name}`)
+            } else {
+                const newDoc = await addDoc(collection(db, "drivers"), {
+                    ...driverPayload,
+                    created_at: serverTimestamp()
+                })
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "DRIVER_ADD", `Added new driver ${data.name}`)
+            }
 
             setSaved(true)
             setTimeout(() => { onSave(data); onClose() }, 800)

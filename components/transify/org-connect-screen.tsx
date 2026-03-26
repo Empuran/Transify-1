@@ -3,11 +3,14 @@
 import { useState } from "react"
 import {
     Bus, ArrowRight, Search, QrCode, Hash, X, ChevronRight,
-    Building2, CheckCircle2, Loader2, GraduationCap, AlertCircle,
+    Building2, CheckCircle2, Loader2, GraduationCap, AlertCircle, ArrowLeft,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { StickyHeader } from "./sticky-header"
+import { db, auth, signInAnonymously } from "@/lib/firebase"
+import { collection, query, where, getDocs, limit, orderBy, startAt, endAt } from "firebase/firestore"
 
 interface Organization {
     id: string
@@ -42,16 +45,27 @@ export function OrgConnectScreen({ category, onOrgVerified, onBack }: OrgConnect
     // ── Verify Org by Code ──────────────────────────────────────────────
     const handleVerifyCode = async () => {
         if (orgCode.length < 3) return
+        if (!db) {
+            setError("Connecting to server... Please wait.")
+            return
+        }
         setLoading(true)
         setError(null)
 
         try {
-            const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(orgCode)}`)
-            if (!res.ok) {
-                const data = await res.json()
-                throw new Error(data.error || "Organization not found")
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
             }
-            const org = await res.json() as Organization
+            const orgsRef = collection(db, "organizations")
+            const q = query(orgsRef, where("code", "==", orgCode.toUpperCase()), limit(1))
+            const snapshot = await getDocs(q)
+
+            if (snapshot.empty) {
+                throw new Error("Organization not found")
+            }
+
+            const doc = snapshot.docs[0]
+            const org = { id: doc.id, ...doc.data() } as Organization
             setVerifiedOrg(org)
         } catch (err: any) {
             setError(err.message || "Unable to verify organization")
@@ -61,20 +75,32 @@ export function OrgConnectScreen({ category, onOrgVerified, onBack }: OrgConnect
     }
 
     // ── Search Orgs ─────────────────────────────────────────────────────
-    const handleSearch = async (query: string) => {
-        setSearchQuery(query)
-        if (query.length < 2) {
+    const handleSearch = async (queryStr: string) => {
+        setSearchQuery(queryStr)
+        if (queryStr.length < 2) {
             setSearchResults([])
             return
         }
+        if (!db) return
         setSearchLoading(true)
         try {
-            const res = await fetch(`/api/org/lookup?search=${encodeURIComponent(query)}`)
-            if (res.ok) {
-                const data = await res.json()
-                setSearchResults(data.organizations || [])
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
             }
-        } catch {
+            const orgsRef = collection(db, "organizations")
+            // Firestore prefix search hack: startAt(query) and endAt(query + "\uf8ff")
+            const q = query(
+                orgsRef,
+                orderBy("name"),
+                startAt(queryStr),
+                endAt(queryStr + "\uf8ff"),
+                limit(10)
+            )
+            const snapshot = await getDocs(q)
+            const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Organization))
+            setSearchResults(results)
+        } catch (err) {
+            console.error("Search error:", err)
             setSearchResults([])
         } finally {
             setSearchLoading(false)
@@ -83,12 +109,24 @@ export function OrgConnectScreen({ category, onOrgVerified, onBack }: OrgConnect
 
     // ── QR Scan (simulate) ─────────────────────────────────────────────
     const handleQrScan = async (code: string) => {
+        if (!db) {
+            setError("Connecting to server... Please wait.")
+            return
+        }
         setLoading(true)
         setError(null)
         try {
-            const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(code)}`)
-            if (!res.ok) throw new Error("Organization not found")
-            const org = await res.json() as Organization
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
+            }
+            const orgsRef = collection(db, "organizations")
+            const q = query(orgsRef, where("code", "==", code.toUpperCase()), limit(1))
+            const snapshot = await getDocs(q)
+
+            if (snapshot.empty) throw new Error("Organization not found")
+            
+            const doc = snapshot.docs[0]
+            const org = { id: doc.id, ...doc.data() } as Organization
             setVerifiedOrg(org)
         } catch (err: any) {
             setError(err.message)
@@ -101,16 +139,8 @@ export function OrgConnectScreen({ category, onOrgVerified, onBack }: OrgConnect
     if (verifiedOrg) {
         return (
             <div className="flex min-h-dvh flex-col bg-background">
+                <StickyHeader title="Admin Access" onBack={onBack} />
                 <div className="flex flex-1 flex-col px-6">
-                    <div className="flex flex-col items-center gap-3 pt-16 pb-8">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary shadow-lg">
-                            <Bus className="h-8 w-8 text-primary-foreground" strokeWidth={1.5} />
-                        </div>
-                        <div className="flex flex-col items-center gap-1">
-                            <h1 className="text-2xl font-bold tracking-tight text-foreground">Transify</h1>
-                            <p className="text-sm text-muted-foreground">Admin Access</p>
-                        </div>
-                    </div>
 
                     <div className="flex flex-col gap-5">
                         {/* Verified Org Card */}
@@ -164,17 +194,8 @@ export function OrgConnectScreen({ category, onOrgVerified, onBack }: OrgConnect
 
     return (
         <div className="flex min-h-dvh flex-col bg-background">
+            <StickyHeader title="Connect Organization" onBack={onBack} />
             <div className="flex flex-1 flex-col px-6">
-                {/* Logo */}
-                <div className="flex flex-col items-center gap-3 pt-16 pb-8">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary shadow-lg">
-                        <Bus className="h-8 w-8 text-primary-foreground" strokeWidth={1.5} />
-                    </div>
-                    <div className="flex flex-col items-center gap-1">
-                        <h1 className="text-2xl font-bold tracking-tight text-foreground">Transify</h1>
-                        <p className="text-sm text-muted-foreground">Admin Access</p>
-                    </div>
-                </div>
 
                 <div className="flex flex-col gap-5">
                     <div className="flex flex-col gap-1">

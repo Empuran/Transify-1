@@ -6,17 +6,18 @@ import {
   MapPin, Play, Square,
   AlertTriangle, Clock, CheckCircle2,
   Circle, Navigation, Users, Route, LogOut,
-  ChevronDown, Activity, Phone, Bell, Zap,
+  ChevronDown, Activity, Phone, Bell, Zap, ArrowLeft,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/hooks/use-auth"
 import { StatusBadge } from "./status-badge"
 import { cn } from "@/lib/utils"
+import { StickyHeader } from "./sticky-header"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useLiveTracking } from "@/hooks/use-live-tracking"
 import { calcDistanceKm } from "@/lib/utils"
 import { useJsApiLoader } from "@react-google-maps/api"
-import { collection, onSnapshot, query, where, updateDoc, doc, addDoc, serverTimestamp, setDoc, getDocs } from "firebase/firestore"
+import { collection, onSnapshot, query, where, updateDoc, doc, addDoc, serverTimestamp, setDoc, getDocs, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { LiveMap } from "./live-map"
 
@@ -114,6 +115,18 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
+  // Diagnostic: If DB is not initialized, show loading state instead of crashing
+  if (!db) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-background px-6 text-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent mb-4" />
+        <h2 className="text-xl font-bold text-foreground">Connecting to server...</h2>
+        <p className="text-sm text-muted-foreground mt-2">Please ensure you have a stable internet connection.</p>
+        <Button onClick={() => window.location.reload()} className="mt-6" variant="outline">Retry Connection</Button>
+      </div>
+    )
+  }
+
   const [orgCode, setOrgCode] = useState<string>("")
   useEffect(() => {
     const urlOrgCode = searchParams.get("orgCode")
@@ -134,14 +147,20 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
     if (!orgCode) return
     setIsResolvingOrg(true)
     try {
-      const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(orgCode.trim().toUpperCase())}`)
-      const data = await res.json()
-      const foundId = data.id || data.organization_id || data._id
-      setResolvedOrgId(foundId || orgCode)
+      const orgsRef = collection(db, "organizations")
+      const q = query(orgsRef, where("code", "==", orgCode.trim().toUpperCase()), limit(1))
+      const snap = await getDocs(q)
+      if (!snap.empty) {
+        setResolvedOrgId(snap.docs[0].id)
+      } else {
+        setResolvedOrgId(orgCode)
+      }
     } catch { setResolvedOrgId(orgCode) }
     finally { setIsResolvingOrg(false) }
   }, [orgCode, profile?.activeOrgId])
-  useEffect(() => { resolveOrg() }, [resolveOrg])
+  useEffect(() => { 
+    if (db) resolveOrg() 
+  }, [resolveOrg])
 
   const [tripState, setTripState] = useState<TripState>(() => {
     if (typeof window !== "undefined") {
@@ -261,7 +280,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   // ── Notify parent helper ─────────────────────────────────────────────────
   const sendParentAlerts = useCallback(async (type: "trip_started" | "stop_reached" | "stop_departed" | "approaching" | "trip_end" | "delay" | "sos" | "reached_school" | "student_reached", nextStopIndex?: number, priority: "normal" | "warning" | "emergency" = "normal", customMessage?: string) => {
-    if (!resolvedOrgId || !currentRoute?.id) return
+    if (!resolvedOrgId || !currentRoute?.id || !db) return
 
     try {
       // 1. Fetch all students on this route
@@ -434,21 +453,20 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   // ── Notify admin helper ──────────────────────────────────────────────────
   const notifyAdmin = useCallback((type: string, title: string, message: string, extra?: any) => {
-    fetch("/api/notifications", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organization_id: resolvedOrgId,
-        type, title, message,
-        metadata: {
-          driver_name: realName,
-          driver_phone: driverPhone || profile?.phone,
-          vehicle_id: selectedVehicle?.plate_number || selectedVehicle?.id,
-          vehicle_type: selectedVehicle?.type,
-          route_name: currentRoute?.route_name,
-          ...extra
-        }
-      })
+    if (!db) return
+    addDoc(collection(db, "notifications"), {
+      organization_id: resolvedOrgId,
+      type, title, message,
+      read: false,
+      timestamp: new Date().toISOString(),
+      metadata: {
+        driver_name: realName,
+        driver_phone: driverPhone || profile?.phone,
+        vehicle_id: selectedVehicle?.plate_number || selectedVehicle?.id,
+        vehicle_type: selectedVehicle?.type,
+        route_name: currentRoute?.route_name,
+        ...extra
+      }
     }).catch(e => console.error("Notify fail:", e))
 
     // Update Vehicle Status in Firestore if it's an alert
@@ -468,67 +486,64 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   // 1. Fetch driver info
   const fetchDriverInfo = useCallback(async () => {
-    if (!resolvedOrgId || !profile?.phone) { 
-      // If we don't have enough info but the profile definitely doesn't exist or org is missing, stop verifying
-      if (profile === null || (resolvedOrgId === "" && !profile?.activeOrgId)) {
-        // Only set verifying to false if we are not expecting a fetch
-      }
-      return 
-    }
+    if (!resolvedOrgId || !profile?.phone || !db) return 
     
-    // Use a ref to prevent concurrent fetches or redundant ones if already loading
     setIsVerifying(true)
     try {
-      const res = await fetch(`/api/drivers/list?organization_id=${resolvedOrgId}`)
-      const data = await res.json()
-      if (data.drivers) {
-        const userPhoneDigits = normalize(profile.phone)
-        const currentDriver = data.drivers.find((d: any) => normalize(d.phone) === userPhoneDigits || d.phone === profile.phone)
-          if (currentDriver) {
-            setRealName(currentDriver.name)
-            setDriverId(currentDriver.id)
-            setDriverPhone(currentDriver.phone || profile.phone || "")
-            setDriverPhoto(currentDriver.photo_url || "")
-            
-            const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
-            if (targetVehId && targetVehId !== "Unassigned") {
-              setAssignedVehicleId(targetVehId)
-            }
+      const q = query(
+        collection(db, "drivers"), 
+        where("organization_id", "==", resolvedOrgId)
+      )
+      const snap = await getDocs(q)
+      const drivers = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[]
+      
+      const userPhoneDigits = normalize(profile.phone)
+      const currentDriver = drivers.find((d: any) => normalize(d.phone) === userPhoneDigits || d.phone === profile.phone)
+      
+      if (currentDriver) {
+        setRealName(currentDriver.name)
+        setDriverId(currentDriver.id)
+        setDriverPhone(currentDriver.phone || profile.phone || "")
+        setDriverPhoto(currentDriver.photo_url || "")
+        
+        const targetVehId = currentDriver.vehicle_id || currentDriver.vehicle
+        if (targetVehId && targetVehId !== "Unassigned") {
+          setAssignedVehicleId(targetVehId)
+        }
 
-            // Sync to cache
-            localStorage.setItem("transify_driver_name", currentDriver.name)
-            localStorage.setItem("transify_driver_id", currentDriver.id)
-            localStorage.setItem("transify_driver_phone", currentDriver.phone || profile.phone || "")
-            localStorage.setItem("transify_driver_photo", currentDriver.photo_url || "")
-            if (targetVehId) localStorage.setItem("transify_driver_assigned_veh_id", targetVehId)
-          }
-        }
-      } catch (e) { console.error("Failed to fetch driver info:", e) }
-      finally { setIsVerifying(false) }
-    }, [resolvedOrgId, profile?.phone])
+        localStorage.setItem("transify_driver_name", currentDriver.name)
+        localStorage.setItem("transify_driver_id", currentDriver.id)
+        localStorage.setItem("transify_driver_phone", currentDriver.phone || profile.phone || "")
+        localStorage.setItem("transify_driver_photo", currentDriver.photo_url || "")
+        if (targetVehId) localStorage.setItem("transify_driver_assigned_veh_id", targetVehId)
+      }
+    } catch (e) { console.error("Failed to fetch driver info:", e) }
+    finally { setIsVerifying(false) }
+  }, [resolvedOrgId, profile?.phone])
   
-    // 2. Fetch vehicles
-    const fetchVehicles = useCallback(async () => {
-      if (!resolvedOrgId) return
-      try {
-        const res = await fetch(`/api/vehicles/list?organization_id=${resolvedOrgId}`)
-        const data = await res.json()
-        if (data.vehicles) {
-          setVehicles(data.vehicles)
-          localStorage.setItem("transify_driver_vehicles", JSON.stringify(data.vehicles))
-          
-          // Auto-select if only one vehicle exists
-          if (data.vehicles.length === 1) {
-            setSelectedVehicle(data.vehicles[0])
-            localStorage.setItem("transify_driver_selected_vehicle", JSON.stringify(data.vehicles[0]))
-          }
-        }
-      } catch (e) { console.error("Failed to fetch vehicles:", e) }
-    }, [resolvedOrgId])
+  const fetchVehicles = useCallback(async () => {
+    if (!resolvedOrgId || !db) return
+    try {
+      const q = query(
+        collection(db, "vehicles"), 
+        where("organization_id", "==", resolvedOrgId)
+      )
+      const snap = await getDocs(q)
+      const vehicles = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[]
+      
+      setVehicles(vehicles)
+      localStorage.setItem("transify_driver_vehicles", JSON.stringify(vehicles))
+      
+      if (vehicles.length === 1) {
+        setSelectedVehicle(vehicles[0])
+        localStorage.setItem("transify_driver_selected_vehicle", JSON.stringify(vehicles[0]))
+      }
+    } catch (e) { console.error("Failed to fetch vehicles:", e) }
+  }, [resolvedOrgId])
 
   // 3. Real-time route listener (Firestore onSnapshot)
   useEffect(() => {
-    if (!resolvedOrgId || !selectedVehicle) return
+    if (!resolvedOrgId || !selectedVehicle || !db) return
     const ids = [...new Set([selectedVehicle.id, selectedVehicle.plate_number].filter(Boolean))]
     const q = query(collection(db, "routes"), where("organization_id", "==", resolvedOrgId), where("vehicle_id", "in", ids))
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -680,7 +695,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   // 4c. Sync Progress to Firestore
   useEffect(() => {
-    if (tripState !== "in-progress" || !selectedVehicle?.id) return
+    if (tripState !== "in-progress" || !selectedVehicle?.id || !db) return
 
     const total = dynamicStops.length
     const current = currentStopIndex
@@ -713,7 +728,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   // 4d. Automatic Stop detection (Geofencing)
   useEffect(() => {
-    if (tripState !== "in-progress" || !location || !dynamicStops.length) return
+    if (tripState !== "in-progress" || !location || !dynamicStops.length || !db) return
 
     const currentStop = dynamicStops[currentStopIndex]
     const geocodedStop = geocodedStops[currentStopIndex]
@@ -756,6 +771,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
 
   const handleStartTrip = async () => {
     if (!selectedVehicle) { alert("Please select a vehicle before starting the trip."); setShowVehiclePicker(true); return }
+    if (!db) return
     setTripState("in-progress")
     setCurrentStopIndex(0)
     setIsAtStop(true)
@@ -802,6 +818,7 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   }
 
   const handleEndTrip = async () => {
+    if (!db) return
     setTripState("completed")
     
     if (driverId) {
@@ -864,88 +881,86 @@ function DriverDashboardContent({ isLoaded }: { isLoaded: boolean }) {
   }
 
   const userName = isVerifying ? "..." : (realName || "Not Found")
-  const initials = userName === "..." ? "??" : userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
+  const initials = userName === "..." ? "??" : (userName || "").split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
   const vehicleType = selectedVehicle?.type || "bus"
 
   return (
     <div className="flex min-h-dvh flex-col bg-background pb-10">
-      {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="bg-primary px-5 pb-5 pt-[env(safe-area-inset-top)] border-b border-white/5 shadow-md">
-        <div className="flex items-center justify-between pt-4">
-          <div>
-            <p className="text-xs text-primary-foreground/70">{isVerifying ? "Please wait" : "Hello"}</p>
-            <h1 className="text-lg font-bold text-primary-foreground flex items-center gap-2">
+      <StickyHeader title="Driver Dashboard" />
+      {/* Driver Info Card */}
+      <div className="mx-4 mt-4 rounded-2xl bg-primary p-5 shadow-lg text-white">
+        <div className="flex items-center gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 overflow-hidden shrink-0 ring-4 ring-white/10">
+            {driverPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={driverPhoto} alt={userName} className="h-full w-full object-cover" />
+            ) : (
+              <span className="text-lg font-bold text-white">{initials}</span>
+            )}
+          </div>
+          <div className="flex-1">
+            <p className="text-[10px] uppercase tracking-widest text-white/50 font-black mb-0.5">{isVerifying ? "Verifying..." : "Authorized Driver"}</p>
+            <h1 className="text-xl font-bold flex items-center gap-2">
               {userName}
               {isVerifying && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />}
               {realName && !isVerifying && <CheckCircle2 className="h-4 w-4 text-white fill-white/20" />}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Delay button always accessible when trip is in progress */}
-            {tripState === "in-progress" && (
-              <button
-                onClick={() => setShowDelayReport(true)}
-                className="flex h-9 items-center gap-1.5 rounded-xl bg-warning/20 border border-warning/30 px-2.5 text-[11px] font-semibold text-warning transition-colors active:bg-warning/30"
-              >
-                <Clock className="h-3.5 w-3.5" /> Delay
-              </button>
-            )}
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-foreground/20 overflow-hidden shrink-0 ring-2 ring-white/10">
-              {driverPhoto ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={driverPhoto} alt={userName} className="h-full w-full object-cover" />
-              ) : (
-                <span className="text-sm font-bold text-primary-foreground">{initials}</span>
-              )}
+          {tripState === "in-progress" && (
+            <button
+              onClick={() => setShowDelayReport(true)}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-orange-500/20 border border-orange-500/30 px-3.5 text-[11px] font-bold text-orange-200 transition-colors active:bg-orange-500/30"
+            >
+              <Clock className="h-4 w-4" /> Delay
+            </button>
+          )}
+        </div>
+
+        {/* Vehicle & Route Stats */}
+        <div className="mt-6 grid grid-cols-2 gap-4">
+          <div className="flex items-center gap-3 rounded-xl bg-white/10 px-4 py-3 border border-white/5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10">
+              <Bus className="h-5 w-5 text-white/80" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] text-white/40 uppercase tracking-widest font-black leading-none mb-1">Bus ID</span>
+              <span className="text-sm font-bold text-white truncate">{selectedVehicle?.plate_number || "None"}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 rounded-xl bg-white/10 px-4 py-3 border border-white/5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10">
+              <Route className="h-5 w-5 text-white/80" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] text-white/40 uppercase tracking-widest font-black leading-none mb-1">Route</span>
+              <span className="text-sm font-bold text-white truncate">{currentRoute?.route_name || "None"}</span>
             </div>
           </div>
         </div>
 
-        {/* Vehicle & Route */}
-        <div className="mt-4 flex flex-col gap-3">
-          <div className="flex gap-3">
-            <div
-              className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5 text-left transition-colors"
-            >
-              <Bus className="h-4 w-4 text-primary-foreground/80" />
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Vehicle</span>
-                <span className="text-xs font-semibold text-primary-foreground truncate">{selectedVehicle?.plate_number || "No Assigned Vehicle"}</span>
-              </div>
-            </div>
-            <div className="flex flex-1 items-center gap-2 rounded-xl bg-primary-foreground/10 px-3 py-2.5">
-              <Route className="h-4 w-4 text-primary-foreground/80" />
-              <div className="flex flex-col">
-                <span className="text-[10px] text-primary-foreground/60 uppercase tracking-wider font-bold">Route</span>
-                <span className="text-xs font-semibold text-primary-foreground">{currentRoute?.route_name || "No route"}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Trip Direction Toggle (Only if not in progress) */}
-          <div className="flex rounded-xl bg-black/10 p-1">
+        {/* Direction Toggle */}
+        {tripState === "not-started" && (
+          <div className="mt-5 flex rounded-xl bg-black/20 p-1">
             <button
-              onClick={() => tripState === "not-started" && setTripDirection("to-school")}
-              disabled={tripState === "in-progress"}
+              onClick={() => setTripDirection("to-school")}
               className={cn(
-                "flex-1 rounded-lg py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
-                tripDirection === "to-school" ? "bg-white text-primary shadow-sm" : "text-primary-foreground/60"
+                "flex-1 rounded-lg py-2.5 text-[10px] font-bold uppercase tracking-wider transition-all",
+                tripDirection === "to-school" ? "bg-white text-primary shadow-sm scale-100" : "text-white/40 hover:text-white/60"
               )}
             >
               To School
             </button>
             <button
-              onClick={() => tripState === "not-started" && setTripDirection("from-school")}
-              disabled={tripState === "in-progress"}
+              onClick={() => setTripDirection("from-school")}
               className={cn(
-                "flex-1 rounded-lg py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
-                tripDirection === "from-school" ? "bg-white text-primary shadow-sm" : "text-primary-foreground/60"
+                "flex-1 rounded-lg py-2.5 text-[10px] font-bold uppercase tracking-wider transition-all",
+                tripDirection === "from-school" ? "bg-white text-primary shadow-sm scale-100" : "text-white/40 hover:text-white/60"
               )}
             >
               From School
             </button>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ── GPS Error ────────────────────────────────────────────────── */}

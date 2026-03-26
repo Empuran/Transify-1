@@ -2,8 +2,11 @@
 
 import { useState, useEffect, Suspense, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 import { AdminLoginScreen } from "@/components/transify/admin-login-screen"
 import { useAuth, type AdminSession } from "@/hooks/use-auth"
+import { db, auth, signInAnonymously } from "@/lib/firebase"
+import { collection, query, where, getDocs, limit } from "firebase/firestore"
 import {
     Bus, ArrowRight, Loader2, Search, Hash, QrCode,
     CheckCircle2, Building2, GraduationCap, MapPin, Users,
@@ -47,14 +50,22 @@ function AdminLoginContent() {
         setError(null)
 
         try {
-            const res = await fetch(`/api/org/lookup?code=${encodeURIComponent(code.trim().toUpperCase())}`)
-            const data = await res.json()
-
-            if (!res.ok) {
-                throw new Error(data.error || "Organization not found")
+            // Ensure authenticated (anonymously) for Firebase Client SDK logic
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
             }
 
-            setVerifiedOrg(data as Organization)
+            const orgsRef = collection(db, "organizations")
+            const q = query(orgsRef, where("code", "==", code.trim().toUpperCase()), limit(1))
+            const snapshot = await getDocs(q)
+
+            if (snapshot.empty) {
+                throw new Error("Organization not found")
+            }
+
+            const doc = snapshot.docs[0]
+            const orgData = { id: doc.id, ...doc.data() } as Organization
+            setVerifiedOrg(orgData)
             setStep("auth")
         } catch (err: any) {
             setError(err.message || "Failed to verify organization")
@@ -70,7 +81,7 @@ function AdminLoginContent() {
         }
     }, [urlOrgCode, hasAutoVerified, verifiedOrg, handleVerifyOrg])
 
-    const handleLoginSuccess = async (customToken: string, adminData: AdminSession) => {
+    const handleLoginSuccess = async (customToken: string | null, adminData: AdminSession) => {
         try {
             await loginAdmin(customToken, adminData)
             router.push("/admin")
@@ -216,7 +227,9 @@ export default function AdminLoginPage() {
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             </div>
         }>
-            <AdminLoginContent />
+            <ErrorBoundary>
+                <AdminLoginContent />
+            </ErrorBoundary>
         </Suspense>
     )
 }

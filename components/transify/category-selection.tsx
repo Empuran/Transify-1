@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { StickyHeader } from "./sticky-header"
 
 export type OrgCategory = "school" | "corporate" | "parent" | "driver"
 
@@ -84,21 +85,8 @@ export function CategorySelectionScreen({ onContinue }: CategorySelectionScreenP
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
+      <StickyHeader title="Welcome to Transify" showBackButton={false} />
       <div className="flex flex-1 flex-col px-6">
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-3 pt-16 pb-8">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary shadow-lg">
-            <Bus className="h-8 w-8 text-primary-foreground" strokeWidth={1.5} />
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Welcome to Transify
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Intelligent Transport. Simplified.
-            </p>
-          </div>
-        </div>
 
         {/* Step: Category Selection */}
         {step === "category" && (

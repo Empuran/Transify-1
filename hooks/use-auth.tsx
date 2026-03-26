@@ -50,7 +50,7 @@ interface AuthContextType {
     adminSession: AdminSession | null
     setActiveOrg: (orgId: string) => void
     loginMock: (role: UserRole, orgCategory?: OrgCategory, phone?: string, name?: string) => void
-    loginAdmin: (customToken: string, adminData: AdminSession) => Promise<void>
+    loginAdmin: (customToken: string | null, adminData: AdminSession) => Promise<void>
     logoutMock: (roleToLogout?: UserRole) => void
 }
 
@@ -99,11 +99,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }, [])
 
-    const loginAdmin = async (customToken: string, adminData: AdminSession) => {
+    const loginAdmin = async (customToken: string | null, adminData: AdminSession) => {
         try {
-            // Sign in with the custom token from the server
-            const cred = await signInWithCustomToken(auth, customToken)
-            setUser(cred.user)
+            if (customToken) {
+                // Sign in with the custom token from the server
+                const cred = await signInWithCustomToken(auth, customToken)
+                setUser(cred.user)
+            } else {
+                // Fallback for static mobile build: use anonymous auth
+                const cred = await signInAnonymously(auth)
+                setUser(cred.user)
+            }
 
             // Build a profile from admin data
             const adminProfile: UserProfile = {
@@ -195,7 +201,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     useEffect(() => {
-        const isConfigured = !!process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+        // Safe to assume configured since we hardcoded in lib/firebase.ts for mobile APK
+        const isConfigured = true;
 
         if (!isConfigured) {
             console.warn("Firebase not configured. Mock mode active.");

@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { compressImage } from "@/lib/utils"
+import { db } from "@/lib/firebase"
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { clientAuditLog } from "@/lib/audit-logger-client"
 
 interface AddStudentFormProps {
     initialData?: any
@@ -74,58 +77,58 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
     // Stops from selected route
     const [boardingStops, setBoardingStops] = useState<RouteStop[]>([])
 
-    // Fetch real routes with full stop data
+    // Fetch real routes and vehicles from Firestore
     useEffect(() => {
         const session = typeof window !== "undefined" ? sessionStorage.getItem("transify_admin_session") : null
         const adminData = session ? JSON.parse(session) : null
         const orgId = adminData?.organization_id
         if (!orgId) return
 
-        fetch(`/api/routes/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.routes) {
-                    const mapped: RouteOption[] = d.routes.map((ro: any) => {
-                        // Build full stop list with lat/lng
-                        const stops: RouteStop[] = []
-                        if (ro.start_point) {
+        const fetchData = async () => {
+            try {
+                // Fetch Routes
+                const rQ = query(collection(db, "routes"), where("organization_id", "==", orgId))
+                const rSnap = await getDocs(rQ)
+                const mapped: RouteOption[] = rSnap.docs.map(doc => {
+                    const ro = doc.data()
+                    const stops: RouteStop[] = []
+                    if (ro.start_point) {
+                        stops.push({
+                            name: (ro.start_point as string).split(",")[0].trim(),
+                            lat: ro.start_lat || 0,
+                            lng: ro.start_lng || 0,
+                        })
+                    }
+                    if (Array.isArray(ro.stops)) {
+                        ro.stops.forEach((s: any) => {
                             stops.push({
-                                name: (ro.start_point as string).split(",")[0].trim(),
-                                lat: ro.start_lat || 0,
-                                lng: ro.start_lng || 0,
+                                name: typeof s === "string" ? s.split(",")[0].trim() : (s.name || "Stop").split(",")[0].trim(),
+                                lat: s.lat || 0,
+                                lng: s.lng || 0,
                             })
-                        }
-                        if (Array.isArray(ro.stops)) {
-                            ro.stops.forEach((s: any) => {
-                                stops.push({
-                                    name: typeof s === "string" ? s.split(",")[0].trim() : (s.name || "Stop").split(",")[0].trim(),
-                                    lat: s.lat || 0,
-                                    lng: s.lng || 0,
-                                })
-                            })
-                        }
-                        if (ro.end_point) {
-                            stops.push({
-                                name: (ro.end_point as string).split(",")[0].trim(),
-                                lat: ro.end_lat || 0,
-                                lng: ro.end_lng || 0,
-                            })
-                        }
-                        return { name: ro.route_name, stops, id: ro.id }
-                    })
-                    setRouteOptions(mapped)
-                }
-            }).catch(() => { })
+                        })
+                    }
+                    if (ro.end_point) {
+                        stops.push({
+                            name: (ro.end_point as string).split(",")[0].trim(),
+                            lat: ro.end_lat || 0,
+                            lng: ro.end_lng || 0,
+                        })
+                    }
+                    return { name: ro.route_name, stops, id: doc.id }
+                })
+                setRouteOptions(mapped)
 
-        fetch(`/api/vehicles/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.vehicles) {
-                    const vMap = d.vehicles.map((v: any) => ({ id: v.id, plate: v.plate_number || v.id }))
-                    setVehicleOptions([{ id: "Unassigned", plate: "Unassigned" }, ...vMap])
-                }
-            }).catch(() => { })
-
+                // Fetch Vehicles
+                const vQ = query(collection(db, "vehicles"), where("organization_id", "==", orgId))
+                const vSnap = await getDocs(vQ)
+                const vMap = vSnap.docs.map(doc => ({ id: doc.id, plate: doc.data().plate_number || doc.id }))
+                setVehicleOptions([{ id: "Unassigned", plate: "Unassigned" }, ...vMap])
+            } catch (err) {
+                console.error("Failed to fetch routes/vehicles:", err)
+            }
+        }
+        fetchData()
     }, [isCorporate])
 
     // When route changes, update boarding stop options
@@ -165,23 +168,26 @@ export function AddStudentForm({ onClose, onSave, isCorporate = false, initialDa
                 finalPhotoUrl = await compressImage(photoFile, 500, 500, 0.6);
             }
 
-            const isEditing = !!initialData?.id
-            const endpoint = isEditing ? "/api/students/update" : "/api/students/add"
-            const method = isEditing ? "PUT" : "POST"
-            const payload = isEditing
-                ? { ...data, photo_url: finalPhotoUrl, id: initialData.id, organization_id: orgId, admin_email: adminData?.email, admin_name: adminData?.name }
-                : { ...data, photo_url: finalPhotoUrl, organization_id: orgId, admin_id: adminData?.user_id, admin_email: adminData?.email, admin_name: adminData?.name }
+            const studentPayload = {
+                ...data,
+                photo_url: finalPhotoUrl,
+                organization_id: orgId,
+                updated_at: serverTimestamp()
+            }
 
-            const res = await fetch(endpoint, {
-                method,
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
-            const result = await res.json()
-            if (!res.ok) throw new Error(result.error)
+            if (initialData?.id) {
+                await updateDoc(doc(db, "students", initialData.id), studentPayload)
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "STUDENT_UPDATE", `Updated ${isCorporate ? "employee" : "student"} ${data.name}`)
+            } else {
+                await addDoc(collection(db, "students"), {
+                    ...studentPayload,
+                    created_at: serverTimestamp()
+                })
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "STUDENT_ADD", `Added new ${isCorporate ? "employee" : "student"} ${data.name}`)
+            }
 
             setSaved(true)
-            setTimeout(() => { onSave(data); onClose() }, 1500) // Longer delay to see the generated ID
+            setTimeout(() => { onSave(data); onClose() }, 1500)
         } catch (err: any) {
             alert(err.message || `Failed to ${initialData ? "update" : "add"} member`)
         } finally {

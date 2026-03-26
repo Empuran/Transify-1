@@ -4,11 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "powershell -ExecutionPolicy Bypass -File ./scripts/build-mobile.ps1",
+    "build:mobile": "powershell -ExecutionPolicy Bypass -File ./scripts/build-mobile.ps1",
+    "next-build": "next build",
+    "start": "npx serve@latest out",
     "lint": "eslint ."
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.0",
+    "@capacitor/cli": "^7.6.0",
+    "@capacitor/core": "^7.6.0",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.12",
     "@radix-ui/react-alert-dialog": "1.1.15",

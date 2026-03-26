@@ -18,7 +18,9 @@ import {
   AlertCircle,
   CheckCircle2,
   X,
+  ArrowLeft,
 } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import { Switch } from "@/components/ui/switch"
 import { useAuth } from "@/hooks/use-auth"
@@ -147,6 +149,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: ParentProfileScreenProps) {
   const { profile } = useAuth()
   const { theme, setTheme } = useTheme()
+  const router = useRouter()
   const isDark = theme === "dark"
 
   // High contrast — stored in localStorage and applied via a data-attribute on <html>
@@ -265,7 +268,13 @@ export function ParentProfileScreen({ isPremium = false, onUpgrade, onLogout }: 
         {/* Profile Header */}
         <div className="bg-card px-5 pb-6 pt-[env(safe-area-inset-top)] shadow-sm">
           <div className="flex items-center gap-4 pt-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary">
+            <button
+                onClick={() => router.back()}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition-all hover:bg-secondary hover:text-foreground active:scale-95"
+            >
+                <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary shrink-0 text-primary-foreground">
               <span className="text-xl font-bold text-primary-foreground">{initials}</span>
             </div>
             <div className="flex flex-1 flex-col">

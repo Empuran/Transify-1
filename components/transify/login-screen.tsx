@@ -1,13 +1,16 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Bus, ArrowRight, Phone, Mail, CheckCircle2, User, Loader2 } from "lucide-react"
+import { Bus, ArrowRight, Phone, Mail, CheckCircle2, User, Loader2, ArrowLeft } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
 import { OrgCategory } from "./category-selection"
 import { cn } from "@/lib/utils"
-import { auth, RecaptchaVerifier, signInWithPhoneNumber } from "@/lib/firebase"
+import { StickyHeader } from "./sticky-header"
+import { auth, db, RecaptchaVerifier, signInWithPhoneNumber, signInAnonymously } from "@/lib/firebase"
+import { collection, query, where, getDocs, limit } from "firebase/firestore"
 import { toast } from "sonner"
 
 export type UserRole = "admin" | "parent" | "driver"
@@ -27,6 +30,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
   const [step, setStep] = useState<Step>("phone")
   const [phone, setPhone] = useState("")
   const [email, setEmail] = useState("")
+  const router = useRouter()
   const [phoneOtp, setPhoneOtp] = useState("")
   const [emailOtp, setEmailOtp] = useState("")
   const [parentName, setParentName] = useState("")
@@ -77,6 +81,10 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
 
   const handleSendPhoneOtp = async () => {
     if (!phone.trim()) return
+    if (!db) {
+      toast.error("Connecting to server... Please wait.")
+      return
+    }
     setLoading(true)
     console.log("[OTP] Starting OTP process for:", phone);
 
@@ -88,26 +96,42 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
     }, 15000);
 
     try {
-      if (assignedRole === "driver") {
-        console.log("[OTP] Step 1: Checking registration...");
-        const res = await fetch("/api/drivers/auth/check-registration", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone }),
-        });
+        if (assignedRole === "driver") {
+          console.log("[OTP] Step 1: Checking registration (Direct Firestore)...");
+          
+          // Ensure authenticated (anonymously) for Firebase Client SDK logic
+          if (!auth.currentUser) {
+            await signInAnonymously(auth)
+          }
 
-        console.log("[OTP] Step 1 Finished: Registration check status:", res.status);
-        const data = await res.json();
-        console.log("[OTP] Step 1 Data:", data);
+          // Normalize phone for comparison (Matching API logic)
+        const normalizedInput = phone.replace(/\s+/g, "").replace(/-/g, "");
+        const digits = normalizedInput.replace(/^\+91/, "").replace(/^0/, "");
+        const phoneVariants = [
+            `+91${digits}`,
+            `+91 ${digits}`,
+            digits,
+            `0${digits}`,
+            normalizedInput,
+            phone.trim()
+        ];
 
-        if (!res.ok) {
-          toast.error(data.error || "Phone number not registered");
+        const driversRef = collection(db, "drivers");
+        const q = query(driversRef, where("phone", "in", phoneVariants), limit(1));
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+          console.log(`[Driver Auth] No driver found for variants:`, phoneVariants);
+          toast.error("This phone number is not registered as a driver. Please contact your administrator.");
           setLoading(false);
           clearTimeout(timeoutId);
           return;
         }
 
-        console.log("[OTP] Step 2: Formatting phone for Firebase...");
+        const driverData = snapshot.docs[0].data();
+        console.log(`[Driver Auth] Found driver:`, { name: driverData.name, id: snapshot.docs[0].id });
+      }
+   console.log("[OTP] Step 2: Formatting phone for Firebase...");
         let phoneForFirebase = phone.trim();
         if (!phoneForFirebase.startsWith("+")) {
           const digits = phoneForFirebase.replace(/\D/g, "");
@@ -129,7 +153,6 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
         console.log("[OTP] Step 4 Finished: Firebase confirmation obtained");
         setConfirmationResult(confirmation);
         toast.success("Verification code sent to your phone");
-      }
 
       console.log("[OTP] Final Step: Setting UI to phone-otp...");
       setStep("phone-otp")
@@ -151,6 +174,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
       try {
         await confirmationResult.confirm(phoneOtp);
         onLogin(assignedRole, phone);
+        router.push("/driver");
       } catch (error: any) {
         console.error("OTP verification failed:", error);
         toast.error("Invalid verification code. Please try again.");
@@ -165,6 +189,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
       if (storedName) {
         // Returning parent - skip name entry
         onLogin(assignedRole, phone, storedName)
+        router.push("/parent");
       } else {
         // First-time parent - ask for name
         setStep("name")
@@ -179,6 +204,7 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
       localStorage.setItem(`transify_parent_name_${phone.replace(/\s+/g, "")}`, parentName.trim())
     }
     onLogin(assignedRole, phone, parentName.trim())
+    router.push("/parent")
   }
 
   const handleSendEmailOtp = () => {
@@ -190,19 +216,14 @@ export function LoginScreen({ onLogin, assignedRole = "parent", orgCategory }: L
     onLogin(assignedRole, phone)
   }
 
+  const screenTitle = assignedRole === "admin" ? "Admin Login" : 
+                       assignedRole === "driver" ? "Driver Login" : "Parent Login"
+
   return (
     <div className="flex min-h-dvh flex-col bg-background">
+      <StickyHeader title={screenTitle} />
+
       <div className="flex flex-1 flex-col items-center justify-center px-6">
-        {/* Logo */}
-        <div className="mb-8 flex flex-col items-center gap-3">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary shadow-lg">
-            <Bus className="h-8 w-8 text-primary-foreground" strokeWidth={1.5} />
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Transify</h1>
-            <p className="text-sm text-muted-foreground">Intelligent Transport. Simplified.</p>
-          </div>
-        </div>
 
         {/* Progress Steps */}
         <div className="mb-8 flex items-center gap-2">

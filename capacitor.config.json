@@ -1,0 +1,6 @@
+{
+  "appId": "com.transify.app",
+  "appName": "Transify",
+  "webDir": "out",
+  "bundledWebRuntime": false
+}

@@ -5,6 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation"
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ArrowRight, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { db, auth, signInAnonymously } from "@/lib/firebase"
+import { collection, query, where, getDocs, updateDoc, doc, getDoc } from "firebase/firestore"
 
 function AcceptInviteContent() {
     const searchParams = useSearchParams()
@@ -33,33 +35,40 @@ function AcceptInviteContent() {
         setMessage("")
 
         try {
-            const res = await fetch("/api/admin/accept-invite", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token, email }),
-            })
-
-            const data = await res.json()
-
-            if (!res.ok) {
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
+            }
+            const q = query(
+                collection(db, "admin_users"),
+                where("email", "==", email.toLowerCase()),
+                where("invite_token", "==", token)
+            )
+            const snap = await getDocs(q)
+            
+            if (snap.empty) {
                 setStatus("error")
-                setMessage(data.error || "Failed to accept invitation")
+                setMessage("Invalid or expired invitation link")
                 return
             }
 
-            if (data.already_active) {
-                // Store org details even for already_active (used in goToLogin)
-                if (data.org_code) setOrgCode(data.org_code)
-                if (data.org_category) setOrgCategory(data.org_category)
+            const adminDocSnapshot = snap.docs[0]
+            const adminData = adminDocSnapshot.data()
+            
+            // Get organization details
+            const orgSnap = await getDoc(doc(db, "organizations", adminData.organization_id))
+            if (orgSnap.exists()) {
+                const orgData = orgSnap.data()
+                setOrgCode(orgData.code)
+                setOrgCategory(orgData.category)
+            }
+
+            if (adminData.status === "ACTIVE") {
                 setStatus("already_active")
-                setMessage(data.message)
+                setMessage("This account is already active. Please log in.")
             } else {
-                // Store org details so we can redirect to the correct login page
-                if (data.org_code) setOrgCode(data.org_code)
-                if (data.org_category) setOrgCategory(data.org_category)
                 // Show name input step
                 setStatus("name_input")
-                setMessage(data.message || "Invitation accepted!")
+                setMessage("Invitation accepted!")
             }
         } catch (err: any) {
             setStatus("error")
@@ -72,17 +81,18 @@ function AcceptInviteContent() {
         setSavingName(true)
 
         try {
-            const res = await fetch("/api/admin/accept-invite", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, name: fullName.trim() }),
-            })
-
-            if (!res.ok) {
-                const data = await res.json()
-                throw new Error(data.error || "Failed to save name")
+            const q = query(
+                collection(db, "admin_users"),
+                where("email", "==", email.toLowerCase())
+            )
+            const snap = await getDocs(q)
+            if (!snap.empty) {
+                await updateDoc(doc(db, "admin_users", snap.docs[0].id), {
+                    name: fullName.trim(),
+                    status: "ACTIVE",
+                    updated_at: new Date().toISOString()
+                })
             }
-
             setStatus("success")
         } catch (err: any) {
             // Even if name save fails, let them proceed

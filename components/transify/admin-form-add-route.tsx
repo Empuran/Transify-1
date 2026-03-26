@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useJsApiLoader } from "@react-google-maps/api"
+import { db } from "@/lib/firebase"
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { clientAuditLog } from "@/lib/audit-logger-client"
 
 const LIBRARIES: ("places")[] = ["places"]
 
@@ -105,14 +108,18 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
         const adminData = session ? JSON.parse(session) : null
         const orgId = adminData?.organization_id
         if (!orgId) return
-        fetch(`/api/vehicles/list?organization_id=${orgId}`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.vehicles) {
-                    const plates = d.vehicles.map((v: any) => v.plate_number || v.id)
-                    setVehicleOptions([...plates, "Unassigned"])
-                }
-            }).catch(() => { })
+
+        const getVehicles = async () => {
+            try {
+                const q = query(collection(db, "vehicles"), where("organization_id", "==", orgId))
+                const snap = await getDocs(q)
+                const plates = snap.docs.map(doc => doc.data().plate_number || doc.id)
+                setVehicleOptions([...plates, "Unassigned"])
+            } catch (err) {
+                console.error("Failed to fetch vehicles:", err)
+            }
+        }
+        getVehicles()
     }, [])
 
     const isValid = data.routeName.trim() && data.startPoint.trim() && data.endPoint.trim()
@@ -182,9 +189,8 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
         if (!orgId) { alert("Organization not found. Please log in again."); return }
 
         try {
-            const endpoint = initialData ? "/api/routes/update" : "/api/routes/add"
             const filteredStops = data.stops.filter(s => s.name.trim())
-            const payload = {
+            const routePayload = {
                 ...data,
                 stops: filteredStops,
                 start_lat: data.startCoords?.lat,
@@ -192,18 +198,20 @@ export function AddRouteForm({ onClose, onSave, initialData }: AddRouteFormProps
                 end_lat: data.endCoords?.lat,
                 end_lng: data.endCoords?.lng,
                 organization_id: orgId,
-                admin_id: adminData?.user_id,
-                admin_email: adminData?.email,
-                ...(initialData ? { route_id: initialData.id } : {})
+                updated_at: serverTimestamp(),
+                route_name: data.routeName // Sync fields
             }
 
-            const res = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            })
-            const result = await res.json()
-            if (!res.ok) throw new Error(result.error)
+            if (initialData) {
+                await updateDoc(doc(db, "routes", initialData.id), routePayload)
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "ROUTE_UPDATE", `Updated route ${data.routeName}`)
+            } else {
+                await addDoc(collection(db, "routes"), {
+                    ...routePayload,
+                    created_at: serverTimestamp()
+                })
+                await clientAuditLog(orgId, adminData.user_id, adminData.email, "ROUTE_ADD", `Created new route ${data.routeName}`)
+            }
 
             setSaved(true)
             setTimeout(() => { onSave(data); onClose() }, 800)

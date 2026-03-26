@@ -4,9 +4,7 @@ import { adminDb } from "@/lib/firebase-admin";
 export async function GET(req: NextRequest) {
     const orgId = req.nextUrl.searchParams.get("organization_id");
 
-    if (!orgId) {
-        return NextResponse.json({ error: "organization_id is required" }, { status: 400 });
-    }
+    if (!orgId) { return NextResponse.json({ error: "organization_id is required" }, { status: 400 }); }
 
     try {
         const snapshot = await adminDb
@@ -32,3 +30,5 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: error.message || "Internal error" }, { status: 500 });
     }
 }
+
+

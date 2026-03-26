@@ -7,9 +7,7 @@ export async function GET(req: NextRequest) {
     const startDate = req.nextUrl.searchParams.get("start_date");
     const endDate = req.nextUrl.searchParams.get("end_date");
 
-    if (!orgId) {
-        return NextResponse.json({ error: "organization_id is required" }, { status: 400 });
-    }
+    if (!orgId) { return NextResponse.json({ error: "organization_id is required" }, { status: 400 }); }
 
     try {
         const snapshot = await adminDb
@@ -36,3 +34,5 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: error.message || "Internal error" }, { status: 500 });
     }
 }
+
+

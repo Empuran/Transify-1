@@ -9,7 +9,7 @@ import { ParentReportsScreen } from "@/components/transify/reports-screen"
 import { ParentProfileScreen } from "@/components/transify/profile-screen"
 import { PremiumScreen } from "@/components/transify/premium-screen"
 import { BottomNav, type ParentTab } from "@/components/transify/bottom-nav"
-import { useRouter } from "next/navigation"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 
 export default function ParentDashboardPage() {
     const [activeTab, setActiveTab] = useState<ParentTab>("home")
@@ -24,7 +24,7 @@ export default function ParentDashboardPage() {
     }
 
     return (
-        <>
+        <ErrorBoundary>
             <div className={activeTab === "home" ? "block" : "hidden"}>
                 <ParentHomeScreen
                     isPremium={isPremium}
@@ -67,6 +67,6 @@ export default function ParentDashboardPage() {
                     }}
                 />
             )}
-        </>
+        </ErrorBoundary>
     )
 }

@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from "next/navigation"
 import { LoginScreen, type UserRole } from "@/components/transify/login-screen"
 import { Suspense } from "react"
 import { useAuth } from "@/hooks/use-auth"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 
 function LoginContent() {
     const searchParams = useSearchParams()
@@ -50,7 +51,9 @@ export default function LoginPage() {
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             </div>
         }>
-            <LoginContent />
+            <ErrorBoundary>
+                <LoginContent />
+            </ErrorBoundary>
         </Suspense>
     )
 }

@@ -1,4 +1,15 @@
 {
   "css.lint.unknownAtRules": "ignore",
-  "css.lint.unknownProperties": "ignore"
+  "css.lint.unknownProperties": "ignore",
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "html.validate.scripts": false,
+  "files.watcherExclude": {
+    "**/out/**": true,
+    "**/android/app/build/**": true,
+    "**/android/.settings/**": true
+  },
+  "search.exclude": {
+    "**/out/**": true,
+    "**/android/app/build/**": true
+  }
 }

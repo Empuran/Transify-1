@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Transify</string>
+    <string name="title_activity_main">Transify</string>
+    <string name="package_name">com.transify.app</string>
+    <string name="custom_url_scheme">com.transify.app</string>
+</resources>

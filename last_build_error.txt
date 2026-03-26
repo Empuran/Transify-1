@@ -1,0 +1,108 @@
+
+> my-project@0.1.0 build
+> next build
+
+??? Next.js 16.1.6 (Turbopack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+??? Compiled successfully in 35.8s
+  Skipping validation of types
+  Collecting page data using 7 workers ...
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+[Firebase Admin] Module loading. Env check: {
+  projectId: 'transify-6b187',
+  email: 'firebase-adminsdk-fbsvc@transify-6b187.iam.gserviceaccount.com',
+  keyExists: true,
+  keyLength: 1704,
+  keyStart: '-----BEGIN PRIVATE KEY-----\nMI',
+  keyEnd: '8o=\n-----END PRIVATE KEY-----\n'
+}
+  Generating static pages using 7 workers (0/47) ...
+node.exe : Error 
+occurred prerendering 
+page 
+"/api/drivers/list". 
+Read more: https://nextj
+s.org/docs/messages/prer
+ender-error
+At line:1 char:1
++ & 
+"D:\NodeJS/node.exe" "D:
+\NodeJS/node_modules/npm
+/bin/npm-cli.js" ru ...
++ ~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo      
+        : NotSpecified  
+  : (Error occurred .   
+ ..prerender-error:S    
+tring) [], RemoteEx    
+ception
+    + FullyQualifiedErr 
+   orId : NativeComman  
+  dError
+ 
+Error: Route 
+/api/drivers/list with 
+`dynamic = "error"` 
+couldn't be rendered 
+statically because it 
+used 
+`nextUrl.searchParams`.
+Export encountered an 
+error on /api/drivers/li
+st/route: 
+/api/drivers/list, 
+exiting the build.
+??? Next.js build 
+worker exited with 
+code: 1 and signal: null

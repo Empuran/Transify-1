@@ -22,6 +22,9 @@ import { AdminManagement } from "./admin-management"
 import { LiveMap } from "./live-map"
 import { RemovalReasonModal } from "./removal-reason-modal"
 import { useRouter } from "next/navigation"
+import { clientAuditLog } from "@/lib/audit-logger-client"
+import { StickyHeader } from "./sticky-header"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 
 type ActiveSection = "overview" | "tracking" | "members" | "drivers" | "vehicles" | "routes" | "reports" | "settings" | "admins"
 type ActiveForm = "student" | "driver" | "vehicle" | "route" | null
@@ -79,7 +82,7 @@ function AuditLogSection({ organizationId }: { organizationId?: string }) {
   const [endDate, setEndDate] = useState("")
 
   useEffect(() => {
-    if (!organizationId) return
+    if (!organizationId || !db) return
     setLoading(true)
     
     let q = query(
@@ -248,7 +251,7 @@ function RecentActivityWidget({ organizationId, onViewLogs }: { organizationId?:
   const itemsPerPage = 5
 
   useEffect(() => {
-    if (!organizationId) { setLoading(false); return }
+    if (!organizationId || !db) { setLoading(false); return }
     const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
     
     const q = query(
@@ -274,8 +277,15 @@ function RecentActivityWidget({ organizationId, onViewLogs }: { organizationId?:
     return () => unsubscribe()
   }, [organizationId])
 
-  const relTime = (ts: string) => {
-    const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000)
+  const relTime = (ts: any) => {
+    if (!ts) return "—"
+    let d: Date
+    if (ts.toMillis) d = new Date(ts.toMillis())
+    else if (ts.seconds) d = new Date(ts.seconds * 1000)
+    else d = new Date(ts)
+
+    if (isNaN(d.getTime())) return "—"
+    const diff = Math.floor((Date.now() - d.getTime()) / 1000)
     if (diff < 60) return "Just now"
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
     return `${Math.floor(diff / 3600)}h ago`
@@ -430,8 +440,16 @@ export function AdminDashboard() {
   const filterByDate = (items: any[], field = "timestamp") => {
     const from = reportFrom ? new Date(reportFrom).getTime() : 0
     const to = reportTo ? new Date(reportTo + "T23:59:59").getTime() : Infinity
+    
     return items.filter((item: any) => {
-      const t = item[field] ? new Date(item[field]).getTime() : 0
+      const ts = item[field]
+      if (!ts) return false
+      
+      let t: number
+      if (ts.toMillis) t = ts.toMillis()
+      else if (ts.seconds) t = ts.seconds * 1000
+      else t = new Date(ts).getTime() || 0
+      
       return t >= from && t <= to
     })
   }
@@ -441,7 +459,13 @@ export function AdminDashboard() {
     if (type === "delay") {
       const rows = filterByDate(dashboardStats.delays)
       const csv = "Time,Driver,Vehicle,Message\n" + rows.map((d: any) => {
-        const time = `"${new Date(d.timestamp).toLocaleString().replace(/"/g, '""')}"`
+        const ts = d.timestamp
+        let dObj: Date
+        if (ts && ts.toMillis) dObj = new Date(ts.toMillis())
+        else if (ts && ts.seconds) dObj = new Date(ts.seconds * 1000)
+        else dObj = new Date(ts || 0)
+        
+        const time = `"${dObj.toLocaleString().replace(/"/g, '""')}"`
         const driver = `"${(d.metadata?.driver_name || "—").replace(/"/g, '""')}"`
         const vehicle = `"${(d.metadata?.vehicle_id || "—").replace(/"/g, '""')}"`
         const msg = `"${(d.message || "—").replace(/"/g, '""')}"`
@@ -473,7 +497,14 @@ export function AdminDashboard() {
   const userEmail = adminSession?.email || profile?.email || ""
   const adminRole = liveRole || adminSession?.role || "ADMIN"
   const isSuperAdmin = adminRole === "SUPER_ADMIN"
-  const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
+  const initials = userName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(n => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "AD"
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 3000) }
   const handleLogout = () => { logoutMock("admin"); router.push("/category") }
@@ -494,7 +525,7 @@ export function AdminDashboard() {
   // ── Live Role Listener ──────────────────────────────────────────────────
   useEffect(() => {
     const userId = adminSession?.user_id
-    if (!userId) return
+    if (!userId || !db) return
     const unsub = onSnapshot(doc(db, "admin_users", userId), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data()
@@ -523,7 +554,7 @@ export function AdminDashboard() {
 
   const fetchStudents = useCallback(() => {
     const orgId = adminSession?.organization_id
-    if (!orgId) return () => { }
+    if (!orgId || !db) return () => { }
     const q = query(
       collection(db, "students"),
       where("organization_id", "==", orgId)
@@ -539,6 +570,7 @@ export function AdminDashboard() {
   }, [adminSession?.organization_id])
 
   useEffect(() => {
+    if (!db) return
     const unsub = fetchStudents()
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchStudents])
@@ -558,7 +590,8 @@ export function AdminDashboard() {
     if (s.section) {
       section = s.section
     } else if (gradeString.includes(" - ")) {
-      section = gradeString.split(" - ")[1].trim()
+      const parts = gradeString.split(" - ")
+      section = parts[1] ? parts[1].trim() : "None"
     }
 
     return (
@@ -585,7 +618,7 @@ export function AdminDashboard() {
 
   const fetchDrivers = useCallback(() => {
     const orgId = adminSession?.organization_id
-    if (!orgId) return () => { }
+    if (!orgId || !db) return () => { }
     const q = query(
       collection(db, "drivers"),
       where("organization_id", "==", orgId)
@@ -601,6 +634,7 @@ export function AdminDashboard() {
   }, [adminSession?.organization_id])
 
   useEffect(() => {
+    if (!db) return
     const unsub = fetchDrivers()
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchDrivers])
@@ -660,7 +694,7 @@ export function AdminDashboard() {
 
   const fetchVehicles = useCallback(() => {
     const orgId = adminSession?.organization_id
-    if (!orgId) return () => { }
+    if (!orgId || !db) return () => { }
 
     const q = query(
       collection(db, "vehicles"),
@@ -683,6 +717,7 @@ export function AdminDashboard() {
   }, [adminSession?.organization_id])
 
   useEffect(() => {
+    if (!db) return
     const unsub = fetchVehicles()
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchVehicles])
@@ -729,7 +764,7 @@ export function AdminDashboard() {
 
   const fetchRoutes = useCallback(() => {
     const orgId = adminSession?.organization_id
-    if (!orgId) return () => { }
+    if (!orgId || !db) return () => { }
     const q = query(
       collection(db, "routes"),
       where("organization_id", "==", orgId)
@@ -745,21 +780,14 @@ export function AdminDashboard() {
   }, [adminSession?.organization_id])
 
   useEffect(() => {
+    if (!db) return
     const unsub = fetchRoutes()
     return () => { if (typeof unsub === 'function') unsub() }
   }, [fetchRoutes])
 
   // ── One-time backfill: sync vehicle route fields for existing data ──────
   useEffect(() => {
-    const orgId = adminSession?.organization_id
-    if (!orgId) return
-    fetch("/api/routes/sync-vehicles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ organization_id: orgId }),
-    }).then(r => r.json()).then(d => {
-      if (d.updated > 0) console.log(`✅ Route-vehicle sync: ${d.message}`)
-    }).catch(() => { })
+    // Legacy sync backfill removed for mobile direct SDK compliance
   }, [adminSession?.organization_id])
 
   const filteredRoutes = useMemo(() => routesData.filter((r: any) =>
@@ -770,7 +798,7 @@ export function AdminDashboard() {
   // ── Notifications Listener ───────────────────────────────────────────────────
   useEffect(() => {
     const orgId = adminSession?.organization_id
-    if (!orgId) return
+    if (!orgId || !db) return
     // No orderBy to avoid composite index requirement — sort in-memory instead
     const q = query(
       collection(db, "notifications"),
@@ -795,7 +823,12 @@ export function AdminDashboard() {
       ? new Date(dashboardDateEnd + "T23:59:59").getTime()
       : dashboardDate ? new Date(dashboardDate + "T23:59:59").getTime() : Date.now()
     const inRange = (n: any) => {
-      const t = new Date(n.timestamp || 0).getTime()
+      if (!n.timestamp) return false
+      let t: number
+      if (n.timestamp.toMillis) t = n.timestamp.toMillis()
+      else if (n.timestamp.seconds) t = n.timestamp.seconds * 1000
+      else t = new Date(n.timestamp).getTime() || 0
+      
       return t >= start && t <= end
     }
     const ranged = notifications.filter(inRange)
@@ -878,7 +911,9 @@ export function AdminDashboard() {
 
     const checkAlerts = async () => {
       const now = Date.now()
-      const orgId = adminSession.organization_id
+      const orgId = adminSession?.organization_id
+      if (!orgId) return
+      
       const alertsToCreate: any[] = []
 
       const dayAgo = now - 24 * 60 * 60 * 1000
@@ -1057,8 +1092,20 @@ export function AdminDashboard() {
 
   const sectionLabel = navGroups.flatMap(g => g.items).find(n => n.id === section)?.label ?? "Overview"
 
+  if (!db) {
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="mr-2 h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm font-medium text-muted-foreground">Connecting to server...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex h-dvh bg-background">
+    <ErrorBoundary>
+      <div className="flex h-dvh bg-background">
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
       <aside className={cn(
@@ -1111,25 +1158,25 @@ export function AdminDashboard() {
 
       {/* ── Main Area ───────────────────────────────────────────────────── */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
-        {/* Top Bar */}
-        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-card px-6">
-          <button onClick={() => setSidebarOpen(true)} className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-secondary lg:hidden">
-            <Menu className="h-5 w-5" />
-          </button>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Admin</span>
-            <span className="text-muted-foreground">/</span>
-            <span className="font-semibold text-foreground">{sectionLabel}</span>
-          </div>
-          <div className="flex flex-1 items-center justify-end gap-3">
-            <div className="relative hidden sm:block">
+        <StickyHeader 
+          title={`Admin / ${sectionLabel}`} 
+          showBackButton={true}
+        >
+          <div className="flex items-center gap-3">
+            {/* Search (Desktop only) */}
+            <div className="relative hidden xl:block">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Search anything..." className="h-9 w-60 rounded-lg border-border bg-background pl-9 text-sm" />
+              <input 
+                placeholder="Search..." 
+                className="h-9 w-60 rounded-xl border border-border bg-background pl-9 text-xs focus:ring-1 focus:ring-primary outline-none transition-all" 
+              />
             </div>
+
+            {/* Notifications */}
             <div className="relative">
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
-                className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background hover:bg-muted transition-colors"
+                className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background hover:bg-muted transition-colors active:scale-95"
               >
                 <Bell className="h-4 w-4 text-foreground" />
                 {badgeCount > 0 && (
@@ -1195,7 +1242,7 @@ export function AdminDashboard() {
                           <Bell className="h-6 w-6 opacity-20" />
                         </div>
                         <p className="text-sm font-bold">All caught up!</p>
-                        <p className="text-[10px]">No unread alerts for your organization</p>
+                        <p className="text-xs">No unread alerts for your organization</p>
                       </div>
                     )}
                   </div>
@@ -1203,6 +1250,7 @@ export function AdminDashboard() {
               )}
             </div>
 
+            {/* Profile */}
             <div className="relative">
               <button
                 onClick={() => setShowProfileDropdown(!showProfileDropdown)}
@@ -1240,8 +1288,13 @@ export function AdminDashboard() {
                 </>
               )}
             </div>
+
+            {/* Sidebar Toggle (Mobile) */}
+            <button onClick={() => setSidebarOpen(true)} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-secondary lg:hidden active:scale-95">
+              <Menu className="h-5 w-5" />
+            </button>
           </div>
-        </header>
+        </StickyHeader>
 
         {/* ── Content ─────────────────────────────────────────────────── */}
         <main className="flex-1 overflow-y-auto p-6">
@@ -1499,7 +1552,19 @@ export function AdminDashboard() {
                       <span aria-hidden="true" className={cn("pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", showRemovedStudents ? "translate-x-3.5" : "-translate-x-0.5")} />
                     </button>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => window.open(`/api/students/export?organization_id=${adminSession?.organization_id}&status=${showRemovedStudents ? 'inactive' : 'active'}`, '_blank')} className="h-9 gap-2">
+                  <Button variant="outline" size="sm" onClick={() => {
+                    const csv = "Name," + (isCorporate ? "Department" : "Grade") + ",Section,ID,Route,Status\n" + 
+                      filteredMembers.map(s => {
+                        const name = `"${(s.name || "").replace(/"/g, '""')}"`
+                        const grade = `"${(isCorporate ? (s.dept || s.department || "") : (s.grade || s.class || "")).replace(/"/g, '""')}"`
+                        const section = `"${(s.section || "").replace(/"/g, '""')}"`
+                        const mid = `"${(s.memberId || s.student_id || s.id || "").replace(/"/g, '""')}"`
+                        const route = `"${(s.route || s.route_name || "").replace(/"/g, '""')}"`
+                        const status = s.lifecycle_status || "ACTIVE"
+                        return `${name},${grade},${section},${mid},${route},${status}`
+                      }).join("\n")
+                    downloadCSV(csv, `${isCorporate ? 'employees' : 'students'}_export_${showRemovedStudents ? 'removed' : 'active'}.csv`)
+                  }} className="h-9 gap-2">
                     <Download className="h-4 w-4" /> Export CSV
                   </Button>
                   <span className="text-xs text-muted-foreground ml-2">{filteredMembers.length} of {studentsData.length}</span>
@@ -1542,12 +1607,22 @@ export function AdminDashboard() {
                               <button onClick={async () => {
                                 if (!confirm(`Restore ${s.name || 'this student'}?`)) return
                                 try {
-                                  const res = await fetch('/api/students/restore', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: s.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName })
-                                  })
-                                  if (!res.ok) throw new Error((await res.json()).error)
+                                  await updateDoc(doc(db, "students", s.id), {
+                                    lifecycle_status: "ACTIVE",
+                                    updated_at: new Date().toISOString(),
+                                  });
+                                  if (userEmail && adminSession?.organization_id) {
+                                    await clientAuditLog({
+                                      action: "update",
+                                      entity_type: "student",
+                                      entity_id: s.id,
+                                      admin_id: userEmail,
+                                      admin_name: userName || "",
+                                      admin_email: userEmail,
+                                      organization_id: adminSession.organization_id,
+                                      details: `Restored student ${s.name || s.id} to active status`,
+                                    });
+                                  }
                                   showToast(`${s.name || 'Student'} restored`)
                                 } catch (err: any) { alert(err.message || 'Restore failed') }
                               }} className="p-1.5 rounded-lg text-muted-foreground hover:text-success hover:bg-success/10 transition-colors" title="Restore">
@@ -1605,7 +1680,19 @@ export function AdminDashboard() {
                       <span aria-hidden="true" className={cn("pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out", showRemovedDrivers ? "translate-x-3.5" : "-translate-x-0.5")} />
                     </button>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => window.open(`/api/drivers/export?organization_id=${adminSession?.organization_id}&status=${showRemovedDrivers ? 'inactive' : 'active'}`, '_blank')} className="h-9 gap-2">
+                  <Button variant="outline" size="sm" onClick={() => {
+                    const csv = "Name,Phone,License Number,License Type,Vehicle ID,Status\n" + 
+                      filteredDrivers.map(d => {
+                        const name = `"${(d.name || "").replace(/"/g, '""')}"`
+                        const phone = `"${(d.phone || "").replace(/"/g, '""')}"`
+                        const lnum = `"${(d.license_number || "").replace(/"/g, '""')}"`
+                        const ltype = `"${(d.license_type || "").replace(/"/g, '""')}"`
+                        const vid = `"${(d.vehicle_id || "Unassigned").replace(/"/g, '""')}"`
+                        const status = d.lifecycle_status === "INACTIVE" ? "REMOVED" : (d.status || "idle")
+                        return `${name},${phone},${lnum},${ltype},${vid},${status}`
+                      }).join("\n")
+                    downloadCSV(csv, `drivers_export_${showRemovedDrivers ? 'removed' : 'active'}.csv`)
+                  }} className="h-9 gap-2">
                     <Download className="h-4 w-4" /> Export CSV
                   </Button>
                 </div>
@@ -1665,8 +1752,32 @@ export function AdminDashboard() {
                                   <button onClick={async () => {
                                     if (!confirm(`Restore driver "${d.name}"?`)) return
                                     try {
-                                      const res = await fetch("/api/drivers/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver_id: d.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName }) })
-                                      if (!res.ok) throw new Error((await res.json()).error)
+                                      await updateDoc(doc(db, "drivers", d.id), {
+                                        lifecycle_status: "ACTIVE",
+                                        leave_date: null,
+                                        removal_reason: null,
+                                        status: "idle",
+                                        updated_at: new Date().toISOString(),
+                                      });
+                                      await addDoc(collection(db, "drivers", d.id, "lifecycle_history"), {
+                                        status: "ACTIVE",
+                                        start_date: new Date().toISOString().split("T")[0],
+                                        reason: "Restored by admin",
+                                        changed_by: userEmail || "",
+                                        timestamp: new Date().toISOString(),
+                                      });
+                                      if (userEmail && adminSession?.organization_id) {
+                                        await clientAuditLog({
+                                          action: "update",
+                                          entity_type: "driver",
+                                          entity_id: d.id,
+                                          admin_id: userEmail,
+                                          admin_name: userName || "",
+                                          admin_email: userEmail,
+                                          organization_id: adminSession.organization_id,
+                                          details: `Restored driver ${d.name || d.id} to active status`,
+                                        });
+                                      }
                                       showToast("Driver restored")
                                     } catch (err: any) { alert(err.message || "Restore failed") }
                                   }} className="p-1.5 rounded-lg text-muted-foreground hover:text-success hover:bg-success/10 transition-colors" title="Restore">
@@ -1860,11 +1971,22 @@ export function AdminDashboard() {
                               <button onClick={() => setEditingVehicle(v)} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-muted transition-all active:scale-90" title="Edit">
                                 <Pencil className="h-4 w-4 text-muted-foreground" />
                               </button>
-                              <button onClick={() => {
-                                if (confirm(`Confirm deletion of vehicle ${v.plate_number || v.id}? This action cannot be undone.`)) {
-                                  fetch("/api/vehicles/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vehicle_id: v.id }) })
-                                    .then(() => { showToast("Vehicle removed"); fetchVehicles() })
-                                }
+                              <button onClick={async () => {
+                                if (!confirm(`Delete vehicle "${v.plate_number}"?`)) return
+                                  deleteDoc(doc(db, "vehicles", v.id)).then(() => {
+                                    if (userEmail && adminSession?.organization_id) {
+                                      clientAuditLog({
+                                        action: "delete",
+                                        entity_type: "vehicle",
+                                        entity_id: v.id,
+                                        admin_id: userEmail,
+                                        admin_email: userEmail,
+                                        organization_id: adminSession.organization_id,
+                                        details: `Deleted vehicle ${v.plate_number || v.id}`,
+                                      });
+                                    }
+                                    showToast("Vehicle deleted")
+                                  }).catch(e => alert("Delete failed"))
                               }} className="flex h-9 w-9 items-center justify-center rounded-xl hover:bg-destructive/10 group transition-all active:scale-90" title="Delete">
                                 <Trash2 className="h-4 w-4 text-destructive opacity-70 group-hover:opacity-100" />
                               </button>
@@ -1967,10 +2089,21 @@ export function AdminDashboard() {
                                 <Pencil className="h-4 w-4 text-muted-foreground" />
                               </button>
                               <button onClick={() => {
-                                if (confirm(`Delete route "${v.route_name}"?`)) {
-                                  fetch("/api/routes/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ route_id: v.id }) })
-                                    .then(() => { showToast("Route deleted"); fetchRoutes() })
-                                }
+                                   if (!confirm(`Delete route "${v.route_name}"?`)) return
+                                  deleteDoc(doc(db, "routes", v.id)).then(() => {
+                                    if (userEmail && adminSession?.organization_id) {
+                                      clientAuditLog({
+                                        action: "delete",
+                                        entity_type: "route",
+                                        entity_id: v.id,
+                                        admin_id: userEmail,
+                                        admin_email: userEmail,
+                                        organization_id: adminSession.organization_id,
+                                        details: `Deleted route ${v.route_name || v.id}`,
+                                      });
+                                    }
+                                    showToast("Route deleted")
+                                  }).catch(e => alert("Delete failed"))
                               }} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-destructive/10 transition-colors" title="Delete">
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </button>
@@ -2537,31 +2670,46 @@ export function AdminDashboard() {
           onConfirm={async (reason) => {
             setRemovalLoading(true)
             try {
-              const endpoint = removalTarget.type === "student" ? "/api/students/delete" : "/api/drivers/delete"
-              const method = removalTarget.type === "student" ? "DELETE" : "POST"
-              const payload = removalTarget.type === "student" 
-                ? { id: removalTarget.entity.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName, removal_reason: reason }
-                : { driver_id: removalTarget.entity.id, organization_id: adminSession?.organization_id, admin_email: userEmail, admin_name: userName, removal_reason: reason }
+              if (removalTarget.type === "student") {
+                await updateDoc(doc(db, "students", removalTarget.entity.id), {
+                  lifecycle_status: "INACTIVE",
+                  removal_reason: reason,
+                  updated_at: new Date().toISOString(),
+                });
+              } else {
+                await updateDoc(doc(db, "drivers", removalTarget.entity.id), {
+                  lifecycle_status: "INACTIVE",
+                  removal_reason: reason,
+                  status: "off-duty",
+                  updated_at: new Date().toISOString(),
+                });
+              }
+
+              if (userEmail && adminSession?.organization_id) {
+                await clientAuditLog({
+                  action: "delete",
+                  entity_type: removalTarget.type,
+                  entity_id: removalTarget.entity.id,
+                  admin_id: userEmail,
+                  admin_name: userName || "",
+                  admin_email: userEmail,
+                  organization_id: adminSession.organization_id,
+                  details: `Removed ${removalTarget.type} ${removalTarget.entity.name} (Reason: ${reason})`,
+                });
+              }
               
-              const res = await fetch(endpoint, {
-                method,
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-              })
-              if (!res.ok) throw new Error((await res.json()).error)
               showToast(`${removalTarget.type === "student" ? "Student" : "Driver"} removed (status: INACTIVE)`)
             } catch (err: any) {
               alert(err.message || 'Removal failed')
             } finally {
               setRemovalLoading(false)
               setRemovalTarget(null)
-              fetchStudents()
-              fetchDrivers()
             }
           }}
         />
       )}
 
-    </div>
+      </div>
+    </ErrorBoundary>
   )
 }

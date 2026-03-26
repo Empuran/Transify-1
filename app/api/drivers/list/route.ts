@@ -3,11 +3,10 @@ import { adminDb } from "@/lib/firebase-admin";
 
 // GET /api/drivers/list?organization_id=xxx
 export async function GET(req: NextRequest) {
-    const orgId = req.nextUrl.searchParams.get("organization_id");
+    const { searchParams } = new URL(req.url);
+    const orgId = searchParams.get("organization_id");
 
-    if (!orgId) {
-        return NextResponse.json({ error: "organization_id is required" }, { status: 400 });
-    }
+    if (!orgId) { return NextResponse.json({ error: "organization_id is required" }, { status: 400 }); }
 
     try {
         let snapshot = await adminDb
@@ -32,7 +31,7 @@ export async function GET(req: NextRequest) {
             }
         }
 
-        const includeInactive = req.nextUrl.searchParams.get("include_inactive") === "true";
+        const includeInactive = searchParams.get("include_inactive") === "true";
 
         const drivers = snapshot.docs
             .map((doc) => ({
@@ -54,3 +53,6 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: error.message || "Internal error" }, { status: 500 });
     }
 }
+
+
+

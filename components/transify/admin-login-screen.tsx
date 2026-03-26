@@ -9,7 +9,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
 import { cn } from "@/lib/utils"
-import type { AdminSession } from "@/hooks/use-auth"
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, runTransaction } from "firebase/firestore"
+import { db, auth, signInAnonymously } from "@/lib/firebase"
+import { type AdminSession } from "@/hooks/use-auth"
+import { ArrowLeft } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 interface Organization {
     id: string
@@ -22,7 +26,7 @@ interface Organization {
 
 interface AdminLoginScreenProps {
     organization: Organization
-    onLoginSuccess: (customToken: string, adminData: AdminSession) => void
+    onLoginSuccess: (customToken: string | null, adminData: AdminSession) => void
     onBack: () => void
 }
 
@@ -36,39 +40,60 @@ export function AdminLoginScreen({ organization, onLoginSuccess, onBack }: Admin
     const [error, setError] = useState<string | null>(null)
     const [devOtp, setDevOtp] = useState<string | null>(null)
     const [fullName, setFullName] = useState("")
-    const [pendingToken, setPendingToken] = useState<string | null>(null)
     const [pendingAdminData, setPendingAdminData] = useState<AdminSession | null>(null)
+    const router = useRouter()
 
     const CategoryIcon = organization.category === "school" ? GraduationCap : Building2
 
     // ── Send OTP ────────────────────────────────────────────────────────
     const handleSendOtp = async () => {
         if (!email.includes("@")) return
-        setLoading(true)
-        setError(null)
+        if (!db) {
+            setError("Connecting to server... Please wait.")
+            return
+        }
         setDevOtp(null)
+        setLoading(true)
 
         try {
-            const res = await fetch("/api/admin/send-otp", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    email: email.toLowerCase(),
-                    organization_id: organization.id,
-                }),
+            // 0. Ensure authenticated (anonymously) for Firebase Client SDK logic
+            if (!auth.currentUser) {
+                await signInAnonymously(auth)
+            }
+
+            // 1. Check if authorized
+            const q = query(
+                collection(db, "admin_users"),
+                where("email", "==", email.toLowerCase()),
+                where("organization_id", "==", organization.id)
+            )
+            const userSnap = await getDocs(q)
+            
+            if (userSnap.empty) {
+                throw new Error("This email is not authorized for this organization. Only invited admins can sign in.")
+            }
+
+            const adminUser = userSnap.docs[0].data()
+            if (adminUser.status === "DISABLED") {
+                throw new Error("Your account has been disabled. Contact the organization administrator.")
+            }
+
+            // 2. Generate OTP
+            const otpCode = Math.floor(100000 + Math.random() * 900000).toString()
+            const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+
+            // 3. Store OTP
+            await setDoc(doc(db, "otp_codes", email.toLowerCase()), {
+                otp: otpCode,
+                email: email.toLowerCase(),
+                organization_id: organization.id,
+                expires_at: expiresAt,
+                created_at: new Date().toISOString(),
+                used: false,
             })
 
-            const data = await res.json()
-
-            if (!res.ok) {
-                throw new Error(data.error || "Failed to send OTP")
-            }
-
-            // In dev mode, the OTP is returned for testing
-            if (data._dev_otp) {
-                setDevOtp(data._dev_otp)
-            }
-
+            // 4. Show code in UI (since no email server in static APK)
+            setDevOtp(otpCode)
             setStep("otp")
         } catch (err: any) {
             setError(err.message || "Failed to send verification code")
@@ -80,45 +105,73 @@ export function AdminLoginScreen({ organization, onLoginSuccess, onBack }: Admin
     // ── Verify OTP ──────────────────────────────────────────────────────
     const handleVerifyOtp = async () => {
         if (otp.length < 6) return
+        if (!db) {
+            setError("Connecting to server... Please wait.")
+            return
+        }
         setLoading(true)
         setError(null)
 
         try {
-            const res = await fetch("/api/admin/verify-otp", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    email: email.toLowerCase(),
-                    otp,
-                    organization_id: organization.id,
-                }),
+            // 1. Get OTP and mark as used atomically
+            const data = await runTransaction(db, async (transaction) => {
+                const otpDocRef = doc(db, "otp_codes", email.toLowerCase())
+                const otpDoc = await transaction.get(otpDocRef)
+                
+                if (!otpDoc.exists()) throw new Error("Verification code expired or invalid")
+                const d = otpDoc.data()
+                
+                if (d.otp !== otp) throw new Error("Invalid verification code")
+                const expiresAt = d.expires_at ? new Date(d.expires_at) : new Date(0)
+                if (expiresAt < new Date()) throw new Error("Verification code has expired")
+                
+                const now = new Date().getTime()
+                const usedAt = d.used_at ? new Date(d.used_at).getTime() : 0
+                const isRecentlyUsed = d.used && (now - usedAt < 10000) // 10s grace
+                
+                if (d.used && !isRecentlyUsed) {
+                    throw new Error("Verification code already used")
+                }
+                
+                transaction.update(otpDocRef, { 
+                    used: true,
+                    used_at: new Date().toISOString()
+                })
+                
+                return d
             })
 
-            const data = await res.json()
-
-            if (!res.ok) {
-                throw new Error(data.error || "Verification failed")
-            }
+            // 2. Get Admin User
+            const q = query(
+                collection(db, "admin_users"),
+                where("email", "==", email.toLowerCase()),
+                where("organization_id", "==", organization.id)
+            )
+            const userSnap = await getDocs(q)
+            if (userSnap.empty) throw new Error("Admin record not found")
+            
+            const adminDoc = userSnap.docs[0]
+            const adminUser = adminDoc.data()
 
             const adminData: AdminSession = {
-                user_id: data.admin.user_id,
-                email: data.admin.email,
-                name: data.admin.name,
-                role: data.admin.role,
-                organization_id: data.admin.organization_id,
+                user_id: adminDoc.id,
+                email: adminUser.email,
+                name: adminUser.name,
+                role: adminUser.role,
+                organization_id: adminUser.organization_id,
                 organization_name: organization.name,
                 organization_category: organization.category,
             }
 
-            // First-time login — show name form
-            if (data.is_first_login) {
-                setPendingToken(data.customToken)
+            // First-time login — status is INVITED or name is not set
+            const hasNoName = !adminUser.name || (adminUser.email && adminUser.name === adminUser.email.split("@")[0])
+            if (adminUser.status === "INVITED" || hasNoName) {
                 setPendingAdminData(adminData)
                 setStep("name")
                 return
             }
 
-            onLoginSuccess(data.customToken, adminData)
+            onLoginSuccess(null, adminData)
         } catch (err: any) {
             setError(err.message || "Verification failed")
         } finally {
@@ -128,22 +181,28 @@ export function AdminLoginScreen({ organization, onLoginSuccess, onBack }: Admin
 
     // ── Save Name (first-time login) ────────────────────────────────────
     const handleSaveName = async () => {
-        if (!fullName.trim() || !pendingToken || !pendingAdminData) return
+        if (!fullName.trim() || !pendingAdminData) return
+        if (!db) {
+            setError("Connecting to server... Please wait.")
+            return
+        }
         setLoading(true)
 
         try {
-            await fetch("/api/admin/accept-invite", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: email.toLowerCase(), name: fullName.trim() }),
+            // Update the admin_user doc
+            await updateDoc(doc(db, "admin_users", pendingAdminData.user_id), {
+                name: fullName.trim(),
+                status: "ACTIVE",
+                updated_at: new Date().toISOString()
             })
 
             // Update admin data with new name and proceed
             const updatedData = { ...pendingAdminData, name: fullName.trim() }
-            onLoginSuccess(pendingToken, updatedData)
-        } catch {
+            onLoginSuccess(null, updatedData)
+        } catch (err: any) {
+            console.error("Save name failed:", err)
             // Still proceed even if name save fails
-            onLoginSuccess(pendingToken, pendingAdminData)
+            onLoginSuccess(null, pendingAdminData)
         } finally {
             setLoading(false)
         }
@@ -152,30 +211,17 @@ export function AdminLoginScreen({ organization, onLoginSuccess, onBack }: Admin
     // ── Resend OTP ──────────────────────────────────────────────────────
     const handleResend = async () => {
         setOtp("")
-        setError(null)
-        setLoading(true)
-
-        try {
-            const res = await fetch("/api/admin/send-otp", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    email: email.toLowerCase(),
-                    organization_id: organization.id,
-                }),
-            })
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.error)
-            if (data._dev_otp) setDevOtp(data._dev_otp)
-        } catch (err: any) {
-            setError(err.message || "Failed to resend")
-        } finally {
-            setLoading(false)
-        }
+        await handleSendOtp()
     }
 
     return (
         <div className="flex min-h-dvh flex-col bg-background">
+            <button
+                onClick={() => onBack()}
+                className="absolute left-6 top-8 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition-all hover:bg-secondary hover:text-foreground active:scale-95 lg:left-12 lg:top-12 z-50"
+            >
+                <ArrowLeft className="h-5 w-5" />
+            </button>
             <div className="flex flex-1 flex-col items-center justify-center px-6">
                 {/* Logo */}
                 <div className="mb-6 flex flex-col items-center gap-3">

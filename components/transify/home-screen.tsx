@@ -23,6 +23,7 @@ import { StatusBadge } from "./status-badge"
 import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { StickyHeader } from "./sticky-header"
 import { db } from "@/lib/firebase"
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, runTransaction, query, where, onSnapshot, setDoc, getDocs, orderBy, limit } from "firebase/firestore"
 
@@ -65,14 +66,21 @@ const resolveStudentData = async (rawStudents: Array<{
 
       if (s.orgId) {
           try {
-              // Fetch from admin API to bypass client Firestore rules
-              const [vRes, rRes] = await Promise.all([
-                  s.vehicleId && s.vehicleId !== "Unassigned" ? fetch(`/api/vehicles/list?organization_id=${s.orgId}`).then(r => r.json()) : Promise.resolve(null),
-                  s.rawRoute && s.rawRoute !== "Unassigned" ? fetch(`/api/routes/list?organization_id=${s.orgId}`).then(r => r.json()) : Promise.resolve(null)
-              ])
+              // Replace fetch with direct Firestore queries
+              let vehicles: any[] = []
+              let routes: any[] = []
 
-              if (vRes?.vehicles) {
-                  vMatch = vRes.vehicles.find((v: any) => v.id === s.vehicleId || v.plate_number === s.vehicleId)
+              if (s.vehicleId && s.vehicleId !== "Unassigned") {
+                const vSnap = await getDocs(query(collection(db, "vehicles"), where("organization_id", "==", s.orgId)))
+                vehicles = vSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+              }
+              if (s.rawRoute && s.rawRoute !== "Unassigned") {
+                const rSnap = await getDocs(query(collection(db, "routes"), where("organization_id", "==", s.orgId)))
+                routes = rSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+              }
+
+              if (vehicles.length > 0) {
+                  vMatch = vehicles.find((v: any) => v.id === s.vehicleId || v.plate_number === s.vehicleId)
                   if (vMatch) {
                       vehiclePlate = vMatch.plate_number || vMatch.registration_number || s.vehicleId
                       driverName = vMatch.driver_name || vMatch.assigned_driver || "Not Assigned"
@@ -80,8 +88,8 @@ const resolveStudentData = async (rawStudents: Array<{
                   }
               }
 
-              if (rRes?.routes) {
-                  const rMatch = rRes.routes.find((r: any) => r.id === s.routeId || r.route_name === s.rawRoute)
+              if (routes.length > 0) {
+                  const rMatch = routes.find((r: any) => r.id === s.routeId || r.route_name === s.rawRoute)
                   if (rMatch) {
                       routeDocId = rMatch.id
                       routeName = rMatch.route_name || s.rawRoute
@@ -123,6 +131,18 @@ interface ParentHomeScreenProps {
 
 export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScreenProps) {
   const { profile } = useAuth()
+
+  // Diagnostic: If DB is not initialized, show loading state
+  if (!db) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-background px-6 text-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent mb-4" />
+        <h2 className="text-xl font-bold text-foreground">Connecting to server...</h2>
+        <p className="text-sm text-muted-foreground mt-2">Please ensure you have a stable internet connection.</p>
+        <Button onClick={() => window.location.reload()} className="mt-6" variant="outline">Retry Connection</Button>
+      </div>
+    )
+  }
   const [students, setStudents] = useState<ChildData[]>(() => {
     if (typeof window !== "undefined" && profile?.phone) {
       try {
@@ -149,7 +169,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
   const [showChildPicker, setShowChildPicker] = useState(false)
 
   const userName = profile?.globalName || "User"
-  const initials = userName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
+  const initials = (userName || "").split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
 
   const [showRatingModal, setShowRatingModal] = useState(false)
   const [showDriverInfo, setShowDriverInfo] = useState(false)
@@ -205,7 +225,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
 
   // Fetch real students from Firestore — tries multiple phone formats for resilience
   useEffect(() => {
-    if (!profile?.phone) return
+    if (!profile?.phone || !db) return
 
     const variants = phoneVariants(profile.phone)
     let cancelled = false
@@ -315,7 +335,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
 
   // Listen for Trip Started Alerts
   useEffect(() => {
-    if (!selectedChild?.id) return
+    if (!selectedChild?.id || !db) return
     const q = query(
       collection(db, "alerts"),
       where("student_id", "==", selectedChild.id),
@@ -361,13 +381,13 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
     // Use rawVehicleId already stored on selectedChild from resolveStudentData
     setLiveVehicleId(selectedChild.rawVehicleId || "")
 
-    // Fetch route from backend API to bypass client permission issues
+    // Fetch route from Firestore to bypass client permission issues
     const orgId = (selectedChild as any).orgId || "org_1"
-    fetch(`/api/routes/list?organization_id=${orgId}`)
-      .then(res => res.json())
-      .then(data => {
-        if (cancelled || !data.routes) return
-        const rData = data.routes.find((r: any) => r.id === selectedChild.routeDocId || r.route_name === selectedChild.route)
+    getDocs(query(collection(db, "routes"), where("organization_id", "==", orgId)))
+      .then(snap => {
+        if (cancelled || snap.empty) return
+        const routes = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        const rData: any = routes.find((r: any) => r.id === selectedChild.routeDocId || r.route_name === selectedChild.route)
         if (!rData) return
 
         const rawStops: any[] = rData.stops || []
@@ -407,7 +427,7 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
 
   // ── Live vehicle listener: updates UI + writes ETA alerts ─────────────────
   useEffect(() => {
-    if (!liveVehicleId || !selectedChild) return
+    if (!liveVehicleId || !selectedChild || !db) return
     const phone = profile?.phone || ""
 
     const unsub = onSnapshot(doc(db, "vehicles", liveVehicleId), async (vSnap) => {
@@ -619,38 +639,19 @@ export function ParentHomeScreen({ isPremium = false, onUpgrade }: ParentHomeScr
 
   return (
     <div className="flex min-h-dvh flex-col bg-background pb-24">
-      {/* Header */}
-      <div className="bg-card px-5 pb-4 pt-[env(safe-area-inset-top)] shadow-sm">
-        <div className="flex items-center justify-between pt-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Hello</p>
-            <h1 className="text-lg font-bold text-foreground">{userName}</h1>
+      <StickyHeader 
+        title={isPremium ? "Transify Premium" : "Transify Home"} 
+        showBackButton={false}
+      />
+
+      <div className="bg-card px-5 pb-4 shadow-sm">
+        {/* Syncing/Upgrade info moved below header or simplified */}
+        {!students.length && (
+          <div className="flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[10px] font-medium text-muted-foreground w-fit mb-2">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Syncing students...
           </div>
-          <div className="flex items-center gap-2">
-            {!students.length && (
-               <div className="flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[10px] font-medium text-muted-foreground">
-                 <Loader2 className="h-3 w-3 animate-spin" />
-                 Syncing...
-               </div>
-            )}
-            {isPremium ? (
-              <span className="rounded-full bg-gold/15 px-2.5 py-0.5 text-[10px] font-bold text-gold">
-                PREMIUM
-              </span>
-            ) : (
-              <button
-                onClick={onUpgrade}
-                className="flex items-center gap-1.5 rounded-full bg-gold/15 px-3 py-1.5 text-[11px] font-bold text-gold transition-colors active:bg-gold/25"
-              >
-                <Sparkles className="h-3 w-3" />
-                Go Premium
-              </button>
-            )}
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary">
-              <span className="text-sm font-bold text-primary-foreground">{initials}</span>
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Child Switcher */}
         <button

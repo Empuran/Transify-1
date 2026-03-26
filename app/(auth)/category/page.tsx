@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { CategorySelectionScreen, type OrgCategory } from "@/components/transify/category-selection"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 
 export default function CategoryPage() {
     const router = useRouter()
@@ -19,5 +20,9 @@ export default function CategoryPage() {
         }
     }
 
-    return <CategorySelectionScreen onContinue={handleContinue} />
+    return (
+        <ErrorBoundary>
+            <CategorySelectionScreen onContinue={handleContinue} />
+        </ErrorBoundary>
+    )
 }

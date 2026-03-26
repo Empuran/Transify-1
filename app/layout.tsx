@@ -4,7 +4,8 @@ import { Analytics } from '@vercel/analytics/react'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AuthProvider } from '@/hooks/use-auth'
 import './globals.css'
-
+// ADD THIS LINE HERE:
+export const dynamic = 'force-static';
 const _inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 
 export const metadata: Metadata = {

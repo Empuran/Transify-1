@@ -12,8 +12,9 @@ import { cn } from "@/lib/utils"
 import type { AdminRole, AdminStatus } from "@/lib/rbac"
 import { hasPermission, canManageAdmins } from "@/lib/rbac"
 import type { AdminSession } from "@/hooks/use-auth"
-import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore"
+import { collection, query, where, onSnapshot, orderBy, limit, doc, updateDoc, addDoc, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { clientAuditLog } from "@/lib/audit-logger-client"
 
 interface AdminUserData {
     user_id: string
@@ -183,25 +184,62 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         setInviteAcceptUrl(null)
 
         try {
-            const res = await fetch("/api/admin/invite", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    email: inviteEmail.toLowerCase(),
-                    role: inviteRole,
-                    organization_id: adminSession.organization_id,
-                    invited_by_user_id: adminSession.user_id,
-                    base_url: typeof window !== "undefined" ? window.location.origin : undefined,
-                }),
+            // 1. Verify existence/status
+            const q = query(
+                collection(db, "admin_users"),
+                where("email", "==", inviteEmail.toLowerCase()),
+                where("organization_id", "==", adminSession.organization_id),
+                limit(1)
+            )
+            const snap = await getDocs(q)
+            
+            if (!snap.empty) {
+                const existing = snap.docs[0].data()
+                if (existing.status === "ACTIVE") {
+                    throw new Error("This admin is already active in this organization")
+                }
+            }
+
+            // 2. Generate token
+            const inviteToken = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2)
+            const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
+
+            const adminData = {
+                email: inviteEmail.toLowerCase(),
+                name: inviteEmail.split("@")[0],
+                organization_id: adminSession.organization_id,
+                role: inviteRole,
+                status: "INVITED" as AdminStatus,
+                invited_by: adminSession.user_id,
+                invite_token: inviteToken,
+                invite_expires_at: expiresAt,
+                created_at: new Date().toISOString(),
+            }
+
+            // 3. Save to Firestore
+            if (!snap.empty) {
+                await updateDoc(doc(db, "admin_users", snap.docs[0].id), adminData)
+            } else {
+                await addDoc(collection(db, "admin_users"), adminData)
+            }
+
+            // 4. Audit Log
+            await clientAuditLog({
+                action: "add",
+                entity_type: "system",
+                entity_id: inviteEmail.toLowerCase(),
+                admin_id: adminSession.user_id,
+                admin_email: adminSession.email,
+                organization_id: adminSession.organization_id,
+                details: `Invited ${inviteEmail} as ${inviteRole}`,
             })
 
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.error)
+            // 5. Build URL
+            const appBase = typeof window !== "undefined" ? window.location.origin : ""
+            const acceptUrl = `${appBase}/accept-invite?token=${inviteToken}&email=${encodeURIComponent(inviteEmail.toLowerCase())}`
+            setInviteAcceptUrl(acceptUrl)
 
-            // Store the accept URL so admin can copy it manually
-            if (data.accept_url) setInviteAcceptUrl(data.accept_url)
-
-            showSuccess(`Invite sent to ${inviteEmail}`)
+            showSuccess(`Invite created for ${inviteEmail}. Share the link manually below.`)
             setInviteEmail("")
             setShowInviteForm(false)
         } catch (err: any) {
@@ -224,20 +262,22 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         setError(null)
 
         try {
-            const res = await fetch("/api/admin/remove", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_id: userId,
-                    removed_by_user_id: adminSession.user_id,
-                    organization_id: adminSession.organization_id,
-                }),
+            await updateDoc(doc(db, "admin_users", userId), {
+                status: "DISABLED",
+                updated_at: new Date().toISOString()
             })
 
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.error)
+            await clientAuditLog({
+                action: "delete",
+                entity_type: "system",
+                entity_id: userId,
+                admin_id: adminSession.user_id,
+                admin_email: adminSession.email,
+                organization_id: adminSession.organization_id,
+                details: `Removed admin ${userId}`,
+            })
 
-            showSuccess(data.message)
+            showSuccess("Admin removed successfully")
             setConfirmRemove(null)
         } catch (err: any) {
             setError(err.message)
@@ -259,19 +299,20 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
         setError(null)
 
         try {
-            const res = await fetch("/api/admin/change-role", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_id: userId,
-                    new_role: newRole,
-                    changed_by_user_id: adminSession.user_id,
-                    organization_id: adminSession.organization_id,
-                }),
+            await updateDoc(doc(db, "admin_users", userId), {
+                role: newRole,
+                updated_at: new Date().toISOString()
             })
 
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.error)
+            await clientAuditLog({
+                action: "update",
+                entity_type: "system",
+                entity_id: userId,
+                admin_id: adminSession.user_id,
+                admin_email: adminSession.email,
+                organization_id: adminSession.organization_id,
+                details: `Changed role for ${userId} to ${newRole}`,
+            })
 
             showSuccess(`Role changed to ${newRole}`)
         } catch (err: any) {
@@ -288,45 +329,24 @@ export function AdminManagement({ adminSession }: AdminManagementProps) {
 
         try {
             // 1. Transfer Super Admin role to selected user
-            const transferRes = await fetch("/api/admin/change-role", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_id: transferTargetId,
-                    new_role: "SUPER_ADMIN",
-                    changed_by_user_id: adminSession.user_id,
-                    organization_id: adminSession.organization_id,
-                }),
+            await updateDoc(doc(db, "admin_users", transferTargetId), {
+                role: "SUPER_ADMIN",
+                updated_at: new Date().toISOString()
             })
-            if (!transferRes.ok) throw new Error("Failed to assign new Super Admin")
 
             // 2. Perform the pending original action
             if (pendingAction.type === 'remove') {
-                const removeRes = await fetch("/api/admin/remove", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_id: pendingAction.userId,
-                        removed_by_user_id: transferTargetId, // New super admin removes the old one
-                        organization_id: adminSession.organization_id,
-                    }),
+                await updateDoc(doc(db, "admin_users", pendingAction.userId), {
+                    status: "DISABLED",
+                    updated_at: new Date().toISOString()
                 })
-                if (!removeRes.ok) throw new Error("Role transferred, but failed to remove your account")
                 showSuccess("Transfer successful. Your account has been removed.")
-                // Potentially force logout or redirect
-                setTimeout(() => window.location.href = "/admin/login", 2000)
+                setTimeout(() => window.location.href = "/admin-login", 2000)
             } else if (pendingAction.type === 'role') {
-                const roleRes = await fetch("/api/admin/change-role", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_id: pendingAction.userId,
-                        new_role: pendingAction.newRole,
-                        changed_by_user_id: transferTargetId, // New super admin changes the old role
-                        organization_id: adminSession.organization_id,
-                    }),
+                await updateDoc(doc(db, "admin_users", pendingAction.userId), {
+                    role: pendingAction.newRole,
+                    updated_at: new Date().toISOString()
                 })
-                if (!roleRes.ok) throw new Error("Role transferred, but failed to update your role")
                 showSuccess(`Transfer successful. You are now an ${pendingAction.newRole}.`)
             }
 

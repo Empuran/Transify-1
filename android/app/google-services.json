@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "959857613661",
+    "project_id": "transify-6b187",
+    "storage_bucket": "transify-6b187.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:959857613661:android:81312f7402e790bee826b4",
+        "android_client_info": {
+          "package_name": "com.transify.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "959857613661-j0uvgnsau97vo03601i77fl5tttt2cbo.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDlUuJeaur7dU3_o2psx7dYL8iwjBpeNCQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "959857613661-j0uvgnsau97vo03601i77fl5tttt2cbo.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
